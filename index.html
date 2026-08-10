@@ -346,6 +346,11 @@
       page-break-before:always;
       break-before:page;
     }
+    .receipt-page-first{
+      display:flex;
+      flex-direction:column;
+      justify-content:center;
+    }
   }
 
   .receipt-doc{
@@ -4520,7 +4525,7 @@ function openReceipt(cheque, client, instItems, isReprint){
   // All agreed payments (the full plan of monthly installments / consultant rows,
   // excluding the reservation and down payment), so the printed list always shows
   // every agreed payment (e.g. all 36) rather than only the cheques registered so far.
-  const agreedInstallments = planForOrder.filter(i=>i.type!=="حجز" && i.type!=="مقدم");
+  const agreedInstallments = planForOrder.filter(i=>i.type!=="حجز");
   const chequeByInstallment = {};
   allCheques.forEach(c=>{
     (c.allocations||[]).forEach(a=>{
@@ -4564,7 +4569,7 @@ function openReceipt(cheque, client, instItems, isReprint){
   printArea.innerHTML = `
   <div class="receipt-doc">
 
-    <div class="receipt-page">
+    <div class="receipt-page receipt-page-first">
       <div class="receipt-head">
         <div>
           <img src="${COMPANY_LOGO_DATA_URI}" alt="بن أرحب للتطوير العقاري" class="receipt-logo">
