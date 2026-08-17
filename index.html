@@ -5091,6 +5091,15 @@ function openReceipt(cheque, client, instItems, isReprint){
     });
   });
   const receiptTaxEnabled = !!client.taxEnabled;
+  // If the client has fully paid off the separate VAT installment (its cheque is
+  // registered and marked "تم التحصيل" for the full amount), the tax is considered
+  // settled up front — so each regular installment's tax/after-tax columns in the
+  // printed record show as already covered (tax = 0, after-tax = before-tax amount)
+  // rather than re-showing the per-installment share of a tax that's already paid.
+  const taxInst = agreedInstallments.find(i=>i.type==="ضريبة");
+  const taxCheque = taxInst ? chequeByInstallment[taxInst.id] : null;
+  const taxFullyCollected = !!(taxCheque && taxCheque.status==="collected" &&
+    (taxCheque.collectedAmount!=null ? taxCheque.collectedAmount : taxCheque.amount) >= (taxInst.amount - 0.5));
   const chequesHistoryHtml = agreedInstallments.map((inst,idx)=>{
     const c = chequeByInstallment[inst.id];
     const isCurrent = !!c && c.id===cheque.id;
@@ -5113,10 +5122,13 @@ function openReceipt(cheque, client, instItems, isReprint){
       receivedDateCell = "—";
       statusLabel = "لم يُصدر شيك بعد";
     }
+    const taxSettled = taxFullyCollected && inst.type!=="ضريبة";
+    const rowTaxAmount = taxSettled ? 0 : inst.taxAmount;
+    const rowTotalWithTax = taxSettled ? inst.amount : inst.totalWithTax;
     const taxCells = receiptTaxEnabled
       ? `<td class="num">${fmt(inst.amount)}</td>
-      <td class="num">${fmt(inst.taxAmount)}</td>
-      <td class="num">${fmt(inst.totalWithTax)}</td>`
+      <td class="num">${fmt(rowTaxAmount)}</td>
+      <td class="num">${fmt(rowTotalWithTax)}</td>`
       : `<td class="num">${receivedDateCell}</td>
       <td class="num">${fmt(inst.dueAmount!=null?inst.dueAmount:inst.amount)}</td>
       <td>${statusLabel}</td>`;
