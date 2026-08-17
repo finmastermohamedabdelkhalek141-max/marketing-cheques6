@@ -5093,33 +5093,23 @@ function openReceipt(cheque, client, instItems, isReprint){
   const chequesHistoryHtml = agreedInstallments.map((inst,idx)=>{
     const c = chequeByInstallment[inst.id];
     const isCurrent = !!c && c.id===cheque.id;
-    let statusLabel, chequeNumberCell, bankCell, receivedDateCell;
+    let chequeNumberCell, bankCell;
     if(c){
-      statusLabel = c.status==="bounced" ? "مرتد" : c.status==="collected" ? "تم التحصيل" : "قيد الانتظار";
-      if(c.status==="collected"){
-        const face = c.amount||0;
-        const collected = (c.collectedAmount!=null ? c.collectedAmount : face);
-        if(face>0.5 && collected < face-0.5){
-          statusLabel = `تحصيل جزئي (${fmt(collected)} من ${fmt(face)})`;
-        }
-      }
       chequeNumberCell = esc(c.chequeNumber);
       bankCell = esc(c.bank||"—");
-      receivedDateCell = fmtDate(c.receivedDate);
     } else {
-      statusLabel = "لم يُصدر شيك بعد";
       chequeNumberCell = "—";
       bankCell = "—";
-      receivedDateCell = "—";
     }
     return `
     <tr${isCurrent ? ' style="background:var(--brass-soft);font-weight:700;"' : ''}>
       <td class="num">${idx+1}${isCurrent ? " ★" : ""}</td>
       <td class="num">${chequeNumberCell}</td>
       <td>${bankCell}</td>
-      <td class="num">${receivedDateCell}</td>
       <td class="num">${fmtDate(inst.dueDate)}</td>
-      <td class="num">${fmt(inst.dueAmount!=null?inst.dueAmount:inst.amount)}</td>
+      <td class="num">${fmt(inst.amount)}</td>
+      <td class="num">${fmt(inst.taxAmount)}</td>
+      <td class="num">${fmt(inst.totalWithTax)}</td>
     </tr>`;
   }).join("");
 
@@ -5149,7 +5139,13 @@ function openReceipt(cheque, client, instItems, isReprint){
         <div><span class="k">اسم الوحدة</span><span class="v">${esc(client.unit)}</span></div>
         <div><span class="k">رقم العقد</span><span class="v">${esc(client.contractNumber||"—")}</span></div>
         <div><span class="k">تاريخ العقد</span><span class="v">${fmtDate(client.contractDate)}</span></div>
+        ${client.taxEnabled ? `
+        <div><span class="k">إجمالي قيمة الوحدة قبل الضريبة</span><span class="v">${fmt(client.unitPrice)} ريال عماني</span></div>
+        <div><span class="k">إجمالي الضريبة</span><span class="v">${fmt(client.taxAmount||0)} ريال عماني</span></div>
+        <div><span class="k">إجمالي قيمة الوحدة بعد الضريبة</span><span class="v">${fmt((client.unitPrice||0)+(client.taxAmount||0))} ريال عماني</span></div>
+        ` : `
         <div><span class="k">إجمالي قيمة الوحدة</span><span class="v">${fmt(client.unitPrice)} ريال عماني</span></div>
+        `}
         <div><span class="k">إجمالي عدد الدفعات التعاقدية المتفق عليها</span><span class="v">${agreedPaymentsCount}</span></div>
       </div>
 
@@ -5159,10 +5155,10 @@ function openReceipt(cheque, client, instItems, isReprint){
     <div class="receipt-page receipt-page-break">
       <div class="receipt-section-title">جميع الدفعات التعاقدية المتفق عليها مع العميل</div>
       <table class="receipt-table">
-        <thead><tr><th>رقم مرجعي</th><th>رقم الشيك</th><th>البنك</th><th>تاريخ الاستلام</th><th>تاريخ الاستحقاق</th><th>القيمة</th><th>الحالة</th></tr></thead>
+        <thead><tr><th>رقم مرجعي</th><th>رقم الشيك</th><th>البنك</th><th>تاريخ الاستحقاق</th><th>قيمة الدفعة قبل الضريبة</th><th>قيمة الضريبة</th><th>قيمة الدفعة بعد الضريبة</th></tr></thead>
         <tbody>${chequesHistoryHtml}</tbody>
       </table>
-      <div class="receipt-total-block"><span>إجمالي الدفعات التعاقدية المتفق عليها من العميل</span><span class="num">${fmt(client.unitPrice)}</span></div>
+      <div class="receipt-total-block"><span>إجمالي الدفعات التعاقدية المتفق عليها من العميل</span><span class="num">${fmt(client.taxEnabled ? (client.unitPrice||0)+(client.taxAmount||0) : client.unitPrice)}</span></div>
 
       <div class="legal-note">
         <strong>ملاحظة قانونية:</strong> هذا المستند لا يُعد بأي حال من الأحوال دليلاً على تحصيل الشركة للمبالغ نقدًا أو بصورة نهائية، وإنما يُثبت فقط أن العميل قد التزم بتسديد دفعات تعاقدية وفقًا لشروط العقد، سواء كانت عن طريق شيكات، تحويلات بنكية، أو أي وسيلة دفع أخرى. وتظل قيمة كل دفعة معلقة لحين تاريخ استحقاقها وتحصيلها الفعلي من الجهة المصرفية أو الوسيلة المعتمدة للسداد. وفي حال تسليم شيكات من العميل، فإنها تُعتبر وسيلة دفع معلقة لا تُعد تحصيلاً نهائيًا إلا بعد صرفها وتأكيد قيمتها من البنك المسحوب عليه.
