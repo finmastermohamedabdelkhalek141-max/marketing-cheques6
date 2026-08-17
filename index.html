@@ -2356,11 +2356,12 @@ function getBankValue(selectId){
    more than 2 days (a short grace period) — otherwise it stays "upcoming". */
 function installmentStatus(inst){
   const paid = inst.paidAmount||0;
-  if(paid >= inst.amount - 0.5) return "paid";
+  const due = inst.dueAmount!=null ? inst.dueAmount : inst.amount;
+  if(paid >= due - 0.5) return "paid";
   if(paid > 0) return "partial";
-  const due = inst.dueDate;
-  if(due){
-    const dueDate = new Date(due+"T00:00:00");
+  const dueDate2 = inst.dueDate;
+  if(dueDate2){
+    const dueDate = new Date(dueDate2+"T00:00:00");
     const today = new Date(todayISO()+"T00:00:00");
     const diffDays = Math.round((today-dueDate)/(1000*60*60*24));
     if(diffDays > 2) return "overdue";
@@ -2492,8 +2493,10 @@ function buildPlan(client){
   }
 
   const overrides = client.planOverrides || {};
+  const taxEnabled = !!client.taxEnabled;
   const taxPctDefault = parseFloat(client.taxPct)||0;
   const taxOverrides = client.installmentTaxOverrides || {};
+  const totalOverrides = client.installmentTotalOverrides || {};
   installments.forEach(inst=>{
     const o = overrides[inst.id];
     if(o){
@@ -2504,18 +2507,36 @@ function buildPlan(client){
       inst.bankOverride = o.bankOverride || "";
       inst.edited = true;
     }
-    // Per-installment tax: a separate value shown next to the installment, computed
-    // from that installment's own amount using the client's tax %, but kept fully
-    // independent of inst.amount (not added to it, not part of totalDue). Editable
-    // per-row and persisted separately from the amount/date overrides above.
+    // Per-installment tax: shown next to the installment, computed from that
+    // installment's own (before-tax) amount using the client's tax %. Only applies
+    // when the contract has tax enabled — otherwise it's always 0. Editable per-row,
+    // persisted separately from the amount/date overrides above.
     const taxOverride = taxOverrides[inst.id];
     if(taxOverride!=null && taxOverride!==""){
       inst.taxAmount = parseFloat(taxOverride)||0;
       inst.taxEdited = true;
     } else {
-      inst.taxAmount = inst.type==="ضريبة" ? 0 : (inst.amount * taxPctDefault/100);
+      inst.taxAmount = (taxEnabled && inst.type!=="ضريبة") ? (inst.amount * taxPctDefault/100) : 0;
       inst.taxEdited = false;
     }
+    // Total including tax: defaults to (before-tax amount + taxAmount), exact, no
+    // rounding of the stored value — display formatting only rounds for the visual.
+    // Independently editable per row; a manual override here doesn't change
+    // inst.amount or inst.taxAmount, only the displayed/effective total.
+    const totalOverride = totalOverrides[inst.id];
+    if(totalOverride!=null && totalOverride!==""){
+      inst.totalWithTax = parseFloat(totalOverride)||0;
+      inst.totalEdited = true;
+    } else {
+      inst.totalWithTax = inst.amount + inst.taxAmount;
+      inst.totalEdited = false;
+    }
+    // dueAmount is the single figure that drives everything the client actually owes
+    // and must pay by cheque: status (paid/partial/overdue), the auto-filled cheque
+    // value, "uncovered"/"remaining" math, and the KPI totals. For a taxed contract
+    // this is the full tax-inclusive total; for a non-taxed contract it's identical
+    // to the before-tax amount (taxAmount is always 0 there).
+    inst.dueAmount = taxEnabled ? inst.totalWithTax : inst.amount;
   });
   return installments;
 }
@@ -2553,9 +2574,9 @@ function planWithPayments(client){
 
 function clientTotals(client){
   const plan = planWithPayments(client);
-  const totalDue = plan.reduce((s,i)=>s+i.amount,0);
+  const totalDue = plan.reduce((s,i)=>s+(i.dueAmount!=null?i.dueAmount:i.amount),0);
   const totalPaid = plan.reduce((s,i)=>s+i.paidAmount,0);
-  const overdue = plan.filter(i=>installmentStatus(i)==="overdue").reduce((s,i)=>s+(i.amount-i.paidAmount),0);
+  const overdue = plan.filter(i=>installmentStatus(i)==="overdue").reduce((s,i)=>s+((i.dueAmount!=null?i.dueAmount:i.amount)-i.paidAmount),0);
   return { totalDue, totalPaid, remaining: totalDue-totalPaid, overdue, plan };
 }
 
@@ -2746,14 +2767,15 @@ function renderChequesScreen(){
           <th>البيان</th><th>تاريخ الاستحقاق</th><th>رقم الشيك</th>
           ` : `
           <th>م</th><th>البيان</th><th>نوع الدفعة</th><th>تاريخ الاستحقاق</th>
-          <th>القيمة المستحقة</th><th>الضريبة</th><th>المسدد</th><th>رقم الشيك</th><th>الحالة</th>${chqReadOnlyRow ? "" : `<th class="no-print">تعديل</th>`}
+          <th>قيمة الدفعة قبل الضريبة</th><th>الضريبة</th><th>الإجمالي شامل الضريبة</th><th>المسدد</th><th>رقم الشيك</th><th>الحالة</th>${chqReadOnlyRow ? "" : `<th class="no-print">تعديل</th>`}
           `}
         </tr></thead>
         <tbody>
           ${t.plan.filter(inst=>inst.amount>0.001).map(inst=>{
             const st = installmentStatus(inst);
-            const remaining = Math.max(0, inst.amount - inst.paidAmount);
-            const uncovered = Math.max(0, inst.amount - inst.coveredAmount);
+            const dueAmt = inst.dueAmount!=null ? inst.dueAmount : inst.amount;
+            const remaining = Math.max(0, dueAmt - inst.paidAmount);
+            const uncovered = Math.max(0, dueAmt - inst.coveredAmount);
             const checked = chequeSearchState.selectedInstallments[inst.id] ? "checked" : "";
             const disabled = uncovered<=0.5 ? "disabled" : "";
             const linkedCheques = state.cheques.filter(chq=>(chq.allocations||[]).some(a=>a.installmentId===inst.id));
@@ -2783,6 +2805,9 @@ function renderChequesScreen(){
               <td class="num" data-print-value="${fmt(inst.taxAmount)}">${chqReadOnlyRow
                 ? `${fmt(inst.taxAmount)} ${inst.taxEdited?`<span class="muted" title="تم تعديلها يدويًا">✎</span>`:""}`
                 : `<input type="number" step="0.001" class="instTaxInput" data-inst="${inst.id}" value="${inst.taxAmount}" style="width:90px;text-align:center;">`}</td>
+              <td class="num" data-print-value="${fmt(inst.totalWithTax)}">${chqReadOnlyRow
+                ? `${fmt(inst.totalWithTax)} ${inst.totalEdited?`<span class="muted" title="تم تعديلها يدويًا">✎</span>`:""}`
+                : `<input type="number" step="0.001" class="instTotalInput" data-inst="${inst.id}" value="${inst.totalWithTax}" style="width:100px;text-align:center;">`}</td>
               <td class="num">${fmt(inst.paidAmount)} ${inst.paidAmount>0 && remaining>0 ? `<span class="muted">(متبقي ${fmt(remaining)})</span>`:""}</td>
               <td class="num">${chqCell}</td>
               <td>${statusBadge(st)}</td>
@@ -3629,7 +3654,8 @@ function renderClientForm(){
           <input id="fTaxAmount" type="number" step="0.001" value="${esc(f.taxAmount)}" placeholder="اتركه فارغًا للحساب التلقائي من النسبة">
         </div>
       </div>
-      <div class="calc-row" id="taxCalcRow" style="${f.taxEnabled?"":"display:none;"}"><span class="k">قيمة الضريبة المحتسبة</span><span class="v" id="spanTaxVal">0 ر.ع</span></div>
+      <div class="calc-row" id="taxCalcRow" style="${f.taxEnabled?"":"display:none;"}"><span class="k">إجمالي قيمة الضريبة</span><span class="v" id="spanTaxVal">0 ر.ع</span></div>
+      <div class="calc-row" id="taxTotalRow" style="${f.taxEnabled?"":"display:none;"}"><span class="k">إجمالي سعر الوحدة شامل ضريبة القيمة المضافة</span><span class="v" id="spanTaxTotalVal">0 ر.ع</span></div>
     </div>
 
     <div class="form-section emphasis-navy">
@@ -4026,6 +4052,27 @@ function bindChequesEvents(){
     });
   });
 
+  // Inline editing of "الإجمالي شامل الضريبة" — defaults to amount+tax but can be
+  // typed manually per row; stored separately, doesn't change amount or tax.
+  document.querySelectorAll(".instTotalInput").forEach(inp=>{
+    inp.addEventListener("change", ()=>{
+      const c = chequeSearchState.client;
+      if(!c) return;
+      const id = inp.dataset.inst;
+      const val = parseFloat(inp.value);
+      if(!c.installmentTotalOverrides) c.installmentTotalOverrides = {};
+      if(isNaN(val) || val<0){
+        toast("أدخل قيمة إجمالي صحيحة");
+        render();
+        return;
+      }
+      c.installmentTotalOverrides[id] = val;
+      saveState();
+      toast("تم تحديث الإجمالي شامل الضريبة");
+      render();
+    });
+  });
+
   const saveBtn = document.getElementById("btnSaveCheque");
   if(saveBtn) saveBtn.addEventListener("click", saveCheque);
   bindBankSelect("chkBank");
@@ -4081,7 +4128,7 @@ function openEditInstallmentModal(instId){
   const plan = planWithPayments(c);
   const inst = plan.find(i=>i.id===instId);
   if(!inst) return;
-  const hasOverride = !!((c.planOverrides && c.planOverrides[instId]) || (c.installmentTaxOverrides && c.installmentTaxOverrides[instId]!=null));
+  const hasOverride = !!((c.planOverrides && c.planOverrides[instId]) || (c.installmentTaxOverrides && c.installmentTaxOverrides[instId]!=null) || (c.installmentTotalOverrides && c.installmentTotalOverrides[instId]!=null));
   const linkedCheques = state.cheques.filter(chq=>(chq.allocations||[]).some(a=>a.installmentId===instId));
   const singleChq = linkedCheques.length===1 ? linkedCheques[0] : null;
 
@@ -4122,6 +4169,10 @@ function openEditInstallmentModal(instId){
         <input id="editInstTax" type="number" step="0.001" value="${inst.taxAmount}">
       </div>
       <div class="field">
+        <label>الإجمالي شامل الضريبة (افتراضيًا = القيمة المستحقة + الضريبة، قابل للتعديل يدويًا)</label>
+        <input id="editInstTotal" type="number" step="0.001" value="${inst.totalWithTax}">
+      </div>
+      <div class="field">
         <label>تاريخ الاستحقاق</label>
         <input id="editInstDate" type="date" value="${esc(inst.dueDate||"")}">
       </div>
@@ -4137,13 +4188,16 @@ function openEditInstallmentModal(instId){
   document.getElementById("editInstSave").addEventListener("click", ()=>{
     const amount = parseFloat(document.getElementById("editInstAmount").value);
     const taxAmount = parseFloat(document.getElementById("editInstTax").value);
+    const totalAmount = parseFloat(document.getElementById("editInstTotal").value);
     const dueDate = document.getElementById("editInstDate").value;
     const label = (document.getElementById("editInstLabel").value||"").trim();
     if(isNaN(amount) || amount<0){ toast("أدخل قيمة صحيحة"); return; }
     if(isNaN(taxAmount) || taxAmount<0){ toast("أدخل قيمة ضريبة صحيحة"); return; }
+    if(isNaN(totalAmount) || totalAmount<0){ toast("أدخل قيمة إجمالي صحيحة"); return; }
     if(!label){ toast("أدخل البيان"); return; }
     if(!c.planOverrides) c.planOverrides = {};
     if(!c.installmentTaxOverrides) c.installmentTaxOverrides = {};
+    if(!c.installmentTotalOverrides) c.installmentTotalOverrides = {};
     const override = { amount, dueDate: dueDate||null, label };
     if(linkedCheques.length===1){
       // Persist directly onto the actual linked cheque record.
@@ -4155,6 +4209,7 @@ function openEditInstallmentModal(instId){
     }
     c.planOverrides[instId] = override;
     c.installmentTaxOverrides[instId] = taxAmount;
+    c.installmentTotalOverrides[instId] = totalAmount;
     saveState();
     root.innerHTML=""; toast("تم تعديل الدفعة"); render();
   });
@@ -4163,6 +4218,7 @@ function openEditInstallmentModal(instId){
     resetBtn.addEventListener("click", ()=>{
       if(c.planOverrides) delete c.planOverrides[instId];
       if(c.installmentTaxOverrides) delete c.installmentTaxOverrides[instId];
+      if(c.installmentTotalOverrides) delete c.installmentTotalOverrides[instId];
       saveState();
       root.innerHTML=""; toast("تمت استعادة القيمة الافتراضية"); render();
     });
@@ -4186,7 +4242,8 @@ function updateChequeAmount(){
   ids.forEach(id=>{
     const inst = plan.find(i=>i.id===id);
     if(inst){
-      total += Math.max(0, inst.amount - inst.coveredAmount);
+      const dueAmt = inst.dueAmount!=null ? inst.dueAmount : inst.amount;
+      total += Math.max(0, dueAmt - inst.coveredAmount);
       labels.push(inst.label);
       if(inst.dueDate && inst.dueDate > latestDue) latestDue = inst.dueDate;
     }
@@ -4214,7 +4271,8 @@ function saveCheque(){
   const plan = planWithPayments(c);
   const allocations = ids.map(id=>{
     const inst = plan.find(i=>i.id===id);
-    return { installmentId:id, amount: Math.max(0, inst.amount - inst.coveredAmount) };
+    const dueAmt = inst.dueAmount!=null ? inst.dueAmount : inst.amount;
+    return { installmentId:id, amount: Math.max(0, dueAmt - inst.coveredAmount) };
   });
 
   const cheque = {
@@ -4445,11 +4503,14 @@ function recalcClientForm(){
   const taxCalcRow = document.getElementById("taxCalcRow");
   if(taxFieldsRow) taxFieldsRow.style.display = taxEnabled ? "" : "none";
   if(taxCalcRow) taxCalcRow.style.display = taxEnabled ? "" : "none";
+  const taxTotalRow = document.getElementById("taxTotalRow");
+  if(taxTotalRow) taxTotalRow.style.display = taxEnabled ? "" : "none";
   if(taxEnabled){
     const taxPct = parseFloat(document.getElementById("fTaxPct")?.value)||0;
     const taxAmountManual = parseFloat(document.getElementById("fTaxAmount")?.value)||0;
     const taxVal = taxAmountManual>0 ? taxAmountManual : (unitPrice*taxPct/100);
     setText("spanTaxVal", fmt(taxVal)+" ر.ع");
+    setText("spanTaxTotalVal", fmt(unitPrice+taxVal)+" ر.ع");
   }
 
   // consultant-mode schedule totals
@@ -5058,8 +5119,7 @@ function openReceipt(cheque, client, instItems, isReprint){
       <td>${bankCell}</td>
       <td class="num">${receivedDateCell}</td>
       <td class="num">${fmtDate(inst.dueDate)}</td>
-      <td class="num">${fmt(inst.amount)}</td>
-      <td>${esc(statusLabel)}</td>
+      <td class="num">${fmt(inst.dueAmount!=null?inst.dueAmount:inst.amount)}</td>
     </tr>`;
   }).join("");
 
