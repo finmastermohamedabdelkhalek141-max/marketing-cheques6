@@ -2036,6 +2036,14 @@ function fmtPct(n){
   n = Number(n)||0;
   return n.toLocaleString("ar-OM",{minimumFractionDigits:0,maximumFractionDigits:2});
 }
+/* Plain (no thousands-separator) numeric string safe to assign to an <input type=number>
+   value, rounded to 3 decimals and stripped of any trailing zeros/dot. Empty for 0/NaN
+   is avoided on purpose — 0 is a valid computed value and should still display as "0". */
+function roundNum(n){
+  n = Number(n);
+  if(!isFinite(n)) n = 0;
+  return String(Math.round(n*1000)/1000);
+}
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 /* Compute the date `months` after startDate, keeping startDate's day-of-month
    (e.g. 29/30/31) in every month that has it, and clamping to that month's
@@ -3391,7 +3399,7 @@ function blankClientForm(){
     yearPlans:[blankYearPlan(), blankYearPlan(), blankYearPlan()],
     installmentMode:"standard", consultantSchedule: defaultConsultantSchedule(),
     extraStandardItems: [],
-    taxEnabled:false, taxPct:"", taxAmount:""
+    taxEnabled:false, taxPct:"", taxAmount:"", taxTotalAmount:"", taxAmountManualFlag:false
   };
 }
 function yearsFromCheques(count){
@@ -3639,7 +3647,7 @@ function renderClientForm(){
 
     <div class="form-section emphasis-brass">
       <div class="form-section-title"><span class="num">2.1</span> الضريبة</div>
-      <p class="hint" style="margin-top:-8px;">تُضاف ضريبة القيمة المضافة كدفعة منفصلة ضمن خطة السداد (قابلة للتحصيل عبر شيك مثل أي دفعة أخرى). تُحسب تلقائيًا كنسبة من سعر الوحدة بدون أي تقريب، ويمكنك بدلًا من ذلك كتابة قيمتها يدويًا.</p>
+      <p class="hint" style="margin-top:-8px;">تُضاف ضريبة القيمة المضافة كدفعة منفصلة ضمن خطة السداد (قابلة للتحصيل عبر شيك مثل أي دفعة أخرى). تُحسب تلقائيًا كنسبة من سعر الوحدة، ويمكنك مسح أي من القيمتين المحسوبتين أدناه وكتابة القيمة يدويًا بدلًا منها.</p>
       <div class="field" style="display:flex;align-items:center;gap:8px;">
         <input type="checkbox" id="fTaxEnabled" style="width:auto;" ${f.taxEnabled?"checked":""}>
         <label style="margin:0;">تفعيل الضريبة لهذا العميل</label>
@@ -3649,13 +3657,17 @@ function renderClientForm(){
           <label>نسبة الضريبة % (تُحسب تلقائيًا من سعر الوحدة)</label>
           <input id="fTaxPct" type="number" step="0.01" value="${esc(f.taxPct)}" placeholder="مثال: 5">
         </div>
+      </div>
+      <div class="row" id="taxCalcRow" style="${f.taxEnabled?"":"display:none;"}">
         <div class="field">
-          <label>أو أدخل قيمة الضريبة يدويًا (تتجاوز النسبة أعلاه)</label>
-          <input id="fTaxAmount" type="number" step="0.001" value="${esc(f.taxAmount)}" placeholder="اتركه فارغًا للحساب التلقائي من النسبة">
+          <label>إجمالي قيمة الضريبة (محسوبة تلقائيًا — يمكن مسحها وكتابتها يدويًا)</label>
+          <input id="fTaxAmount" type="number" step="0.001" value="${esc(f.taxAmount)}" data-manual="${f.taxAmountManualFlag?"1":""}" placeholder="0">
+        </div>
+        <div class="field">
+          <label>إجمالي سعر الوحدة شامل الضريبة (محسوب تلقائيًا — يمكن مسحه وكتابته يدويًا)</label>
+          <input id="fTaxTotalAmount" type="number" step="0.001" value="${esc(f.taxTotalAmount)}" placeholder="0">
         </div>
       </div>
-      <div class="calc-row" id="taxCalcRow" style="${f.taxEnabled?"":"display:none;"}"><span class="k">إجمالي قيمة الضريبة</span><span class="v" id="spanTaxVal">0 ر.ع</span></div>
-      <div class="calc-row" id="taxTotalRow" style="${f.taxEnabled?"":"display:none;"}"><span class="k">إجمالي سعر الوحدة شامل ضريبة القيمة المضافة</span><span class="v" id="spanTaxTotalVal">0 ر.ع</span></div>
     </div>
 
     <div class="form-section emphasis-navy">
@@ -4325,7 +4337,9 @@ function bindClientsEvents(){
         extraStandardItems: (c.extraStandardItems||[]).map(r=>({ id:r.id||uid("si"), label:r.label, percent:r.percent })),
         taxEnabled: !!c.taxEnabled,
         taxPct: c.taxPct!=null ? c.taxPct : "",
-        taxAmount: c.taxAmountManual!=null ? c.taxAmountManual : ""
+        taxAmount: c.taxAmountManual!=null ? c.taxAmountManual : "",
+        taxTotalAmount: c.taxEnabled ? ((c.unitPrice||0)+(c.taxAmount||0)) : "",
+        taxAmountManualFlag: c.taxAmountManual!=null
       };
       // pad in case stored years count doesn't match yearPlans length
       while(clientForm.yearPlans.length < clientForm.years) clientForm.yearPlans.push(blankYearPlan());
@@ -4460,6 +4474,19 @@ function bindClientFormRecalc(){
   const card = document.getElementById("clientFormCard");
   if(!card) return;
   card.addEventListener("input", recalcClientForm);
+  // The tax-amount and total-after-tax boxes mirror each other live; typing directly
+  // into one marks it "manual" (so the %-based auto-calc leaves it alone) and clears
+  // the manual flag on the other, since only one field can be the active source at a time.
+  const amtEl = document.getElementById("fTaxAmount");
+  const totEl = document.getElementById("fTaxTotalAmount");
+  if(amtEl) amtEl.addEventListener("input", ()=>{
+    amtEl.dataset.manual = amtEl.value.trim()==="" ? "" : "1";
+    if(totEl) totEl.dataset.manual = "";
+  });
+  if(totEl) totEl.addEventListener("input", ()=>{
+    totEl.dataset.manual = totEl.value.trim()==="" ? "" : "1";
+    if(amtEl) amtEl.dataset.manual = "";
+  });
   recalcClientForm();
 }
 
@@ -4495,22 +4522,43 @@ function recalcClientForm(){
       ? `<span style="color:var(--warn);">تنبيه: نسبة الحجز + المقدم تتجاوز 100%</span>` : "";
   }
 
-  // tax: auto = % of unit price (no rounding of the raw value — only display is
-  // formatted); a manually-typed amount, if present, overrides the percentage calc
+  // tax: auto = % of unit price. Both the tax-amount and the total-after-tax boxes
+  // are live-editable — whichever one the user is actively typing in "wins" and the
+  // other is derived from it and kept in sync; a field is only treated as manually
+  // overridden (and left alone by the %-based auto-calc) while it carries the
+  // data-manual flag set by the input listener below.
   const taxEnabledEl = document.getElementById("fTaxEnabled");
   const taxEnabled = !!(taxEnabledEl && taxEnabledEl.checked);
   const taxFieldsRow = document.getElementById("taxFieldsRow");
   const taxCalcRow = document.getElementById("taxCalcRow");
   if(taxFieldsRow) taxFieldsRow.style.display = taxEnabled ? "" : "none";
   if(taxCalcRow) taxCalcRow.style.display = taxEnabled ? "" : "none";
-  const taxTotalRow = document.getElementById("taxTotalRow");
-  if(taxTotalRow) taxTotalRow.style.display = taxEnabled ? "" : "none";
   if(taxEnabled){
     const taxPct = parseFloat(document.getElementById("fTaxPct")?.value)||0;
-    const taxAmountManual = parseFloat(document.getElementById("fTaxAmount")?.value)||0;
-    const taxVal = taxAmountManual>0 ? taxAmountManual : (unitPrice*taxPct/100);
-    setText("spanTaxVal", fmt(taxVal)+" ر.ع");
-    setText("spanTaxTotalVal", fmt(unitPrice+taxVal)+" ر.ع");
+    const autoTaxVal = unitPrice*taxPct/100;
+    const amtEl = document.getElementById("fTaxAmount");
+    const totEl = document.getElementById("fTaxTotalAmount");
+    if(amtEl && totEl){
+      const active = document.activeElement;
+      const amtManual = amtEl.dataset.manual==="1";
+      const totManual = totEl.dataset.manual==="1";
+      if(active===totEl && totManual){
+        const totVal = parseFloat(totEl.value)||0;
+        amtEl.value = roundNum(totVal-unitPrice);
+      } else if(active===amtEl && amtManual){
+        const amtVal = parseFloat(amtEl.value)||0;
+        totEl.value = roundNum(unitPrice+amtVal);
+      } else if(totManual){
+        const totVal = parseFloat(totEl.value)||0;
+        amtEl.value = roundNum(totVal-unitPrice);
+      } else if(amtManual){
+        const amtVal = parseFloat(amtEl.value)||0;
+        totEl.value = roundNum(unitPrice+amtVal);
+      } else {
+        amtEl.value = roundNum(autoTaxVal);
+        totEl.value = roundNum(unitPrice+autoTaxVal);
+      }
+    }
   }
 
   // consultant-mode schedule totals
@@ -4617,6 +4665,8 @@ function syncFormFromInputs(){
   clientForm.taxEnabled = document.getElementById("fTaxEnabled")?.checked || false;
   clientForm.taxPct = g("fTaxPct");
   clientForm.taxAmount = g("fTaxAmount");
+  clientForm.taxTotalAmount = g("fTaxTotalAmount");
+  clientForm.taxAmountManualFlag = document.getElementById("fTaxAmount")?.dataset.manual==="1";
   document.querySelectorAll(".yearPctInput").forEach(inp=>{
     const idx = parseInt(inp.dataset.idx,10);
     if(clientForm.yearPlans[idx]) clientForm.yearPlans[idx].percent = inp.value;
