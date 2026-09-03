@@ -2481,7 +2481,7 @@ function buildPlan(client){
         else amt = yp.lastInstallment||0;
         installments.push({
           id: client.id+"_y"+y+"m"+m, seq: seq++, type:"قسط شهري",
-          label: `السنة ${arabicYear(y)} — شهر ${m}`,
+          label: `السنة ${arabicYear(y)} — دفعة رقم ${m}`,
           year:y, month:m, amount: amt,
           dueDate: toISODateLocal(due)
         });
