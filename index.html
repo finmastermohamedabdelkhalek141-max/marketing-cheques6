@@ -4036,9 +4036,9 @@ function renderClientForm(){
           <div class="import-hint" id="chequesYearsHint">= ${f.years} ${f.years===1?"سنة":"سنوات"} بالتفصيل (${parseInt(f.chequesCount,10)||(f.years*12)} شهرًا معروضًا أدناه)</div>
         </div>
         <div class="field" style="margin-bottom:0;">
-          <label>عدد الأشهر المرنة في كل سنة (الافتراضي 11)</label>
+          <label>الحد الأقصى للأشهر المرنة في السنة (الافتراضي 11)</label>
           <input id="fFlexMonths" type="number" min="1" max="12" step="1" value="${flexN}" ${can("clients.flexMonths")?"":"readonly"}>
-          <div class="import-hint" id="flexMonthsHint">${tailN>0 ? `الأشهر ${flexN+1}–12 (${tailN} ${tailN===1?"شهر":"أشهر"}) تُحسب تلقائيًا كقسط أخير` : "كل أشهر السنة مرنة — بدون قسط أخير تلقائي"}${can("clients.flexMonths")?"":" — التعديل بصلاحية خاصة"}</div>
+          <div class="import-hint" id="flexMonthsHint">${tailN>0 ? `حد أقصى — لا يُشترط استخدامها كلها؛ أي أشهر لا تغطيها المراحل (وآخر ${tailN} ${tailN===1?"شهر":"أشهر"} على الأقل) تُحسب تلقائيًا، والسنة الأخيرة تتبع عدد الأقساط المتبقي` : "كل أشهر السنة يمكن أن تكون مرنة"}${can("clients.flexMonths")?"":" — التعديل بصلاحية خاصة"}</div>
         </div>
       </div>
       <div class="table-wrap" style="margin-top:14px;background:#fff;">
@@ -4077,7 +4077,7 @@ function renderClientForm(){
     </div>
 
     <div class="form-section">
-      <div class="form-section-title"><span class="num">5</span> حساب الأقساط المرنة لكل سنة (${flexN} شهرًا مرنة موزّعة على المراحل${tailN>0?"، والباقي تلقائي":""})</div>
+      <div class="form-section-title"><span class="num">5</span> حساب الأقساط المرنة لكل سنة (حتى ${flexN} شهرًا مرنة موزّعة على المراحل${tailN>0?"، والباقي تلقائي":""})</div>
       <p class="hint" style="margin-top:-6px;">لكل مرحلة: أدخل قيمة القسط الشهري يدويًا، أو اتركها صفرًا ليتم حسابها تلقائيًا. المرحلة التلقائية تأخذ نصيبها بالتساوي من المبلغ المتبقي بعد خصم المراحل اليدوية (ويشاركها ${tailN>0 ? "القسط الأخير" : "باقي الأقساط"} في هذا التوزيع).</p>
       <div id="phaseBlocksWrap">${phaseBlocks}</div>
     </div>
