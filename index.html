@@ -3563,7 +3563,7 @@ function openBounceModal(chqId){
 let clientForm = null; // when editing/adding
 function newPhase(months, value){ return { id: uid("ph"), months: months, value: value==null ? "" : value }; }
 function defaultPhases(){ return [ newPhase(3), newPhase(3), newPhase(5) ]; }
-function blankYearPlan(){ return { percent:"", amtManual:"", phases: defaultPhases() }; }
+function blankYearPlan(){ return { percent:"", amtManual:"", noFlex:false, phases: defaultPhases() }; }
 
 /* Default rows for the "consultant" installment schedule, mirroring the reference
    22-item breakdown supplied by the consultant. Items 1 (دفعة الحجز) and 2 (دفعة المقدم)
@@ -3715,6 +3715,7 @@ function storedPhasesToForm(yp){
 }
 /* قيمة قسط الشهر m (1..12) من خطة سنة مخزّنة — تدعم الشكل الجديد والقديم */
 function monthAmountForYearPlan(yp, m, flexN){
+  if(yp.noFlex) return yp.lastInstallment||0;   // سنة بدون مرونة: كل الأقساط متساوية
   if(m>normFlexMonths(yp.flexMonths!=null ? yp.flexMonths : flexN)) return yp.lastInstallment||0;
   if(Array.isArray(yp.phases) && yp.phases.length){
     let acc = 0;
@@ -3868,7 +3869,13 @@ function renderClientForm(){
   const lastInstLabel = tailN===0 ? "لا يوجد قسط أخير (كل أشهر السنة مرنة)"
     : (tailN===1 ? "القسط الأخير (الشهر 12) — يُحسب تلقائيًا دائمًا"
     : `الأقساط الأخيرة (الأشهر ${flexN+1}–12) — قيمة كل شهر تُحسب تلقائيًا`);
-  let phaseBlocks = `<div id="monthsTotalChk" style="font-size:12.5px;margin-bottom:8px;"></div>`;
+  const allNoFlex = f.yearPlans.slice(0,f.years).length>0 && f.yearPlans.slice(0,f.years).every(yp=>yp && yp.noFlex);
+  let phaseBlocks = `
+    <div class="field no-print" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+      <input type="checkbox" id="fNoFlexAll" style="width:auto;" ${allNoFlex?"checked":""}>
+      <label style="margin:0;" for="fNoFlexAll">بدون مرونة على كل السنوات (أقساط شهرية متساوية في كل سنة)</label>
+    </div>
+    <div id="monthsTotalChk" style="font-size:12.5px;margin-bottom:8px;"></div>`;
   for(let i=0;i<f.years;i++){
     const yp = f.yearPlans[i] || (f.yearPlans[i] = blankYearPlan());
     if(!Array.isArray(yp.phases) || !yp.phases.length) yp.phases = defaultPhases();
@@ -3885,6 +3892,17 @@ function renderClientForm(){
     phaseBlocks += `
       <div class="year-block">
         <h4>السنة ${arabicYear(i+1)} <span class="muted" style="font-weight:400;font-size:12.5px;">— إجمالي السنة: <span id="yearVal2_${i}">0</span> ر.ع</span> <span class="muted" style="font-weight:400;font-size:12.5px;">— عدد أقساطها: ${miY}</span></h4>
+        <div class="field no-print" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <input type="checkbox" class="yearNoFlex" data-idx="${i}" id="yearNoFlex_${i}" style="width:auto;" ${yp.noFlex?"checked":""}>
+          <label style="margin:0;" for="yearNoFlex_${i}">بدون مرونة في هذه السنة (أقساط متساوية)</label>
+        </div>
+        ${yp.noFlex ? `
+        <div class="calc-row">
+          <span class="k" id="lastInstLabel_${i}">قيمة القسط الشهري المتساوي (${miY} ${miY===1?"قسط":"أقساط"})</span>
+          <span class="v" id="lastInst_${i}">0 ر.ع</span>
+        </div>
+        <div id="phaseChk_${i}" style="font-size:12.5px;margin-top:4px;"></div>
+        </div>` : `
         <div class="phase-grid">
           ${phases.map((ph,pi)=>`
           <div class="phase-card">
@@ -3914,7 +3932,7 @@ function renderClientForm(){
           <span class="v" id="lastInst_${i}">0 ر.ع</span>
         </div>
         <div id="phaseChk_${i}" style="font-size:12.5px;margin-top:4px;"></div>
-      </div>`;
+      </div>`}`;
   }
 
   return `
@@ -4672,6 +4690,7 @@ function bindClientsEvents(){
         yearPlans: (c.yearPlans||[]).map(yp=>({
           percent: yp.percent!=null ? (yp.percent*100) : "",
           amtManual: yp.amtManual ?? "",
+          noFlex: !!yp.noFlex,
           phases: storedPhasesToForm(yp)
         })),
         installmentMode: c.installmentMode || "standard",
@@ -4819,6 +4838,17 @@ function bindClientsEvents(){
       render();
     });
   }
+  // ===== بدون مرونة: لسنة معينة أو لكل السنوات =====
+  document.querySelectorAll(".yearNoFlex").forEach(cb=>{
+    cb.addEventListener("change", ()=>{ syncFormFromInputs(); render(); });
+  });
+  { const allCb = document.getElementById("fNoFlexAll");
+    if(allCb) allCb.addEventListener("change", ()=>{
+      syncFormFromInputs();
+      const on = allCb.checked;
+      clientForm.yearPlans.forEach(yp=>{ yp.noFlex = on; });
+      render();
+    }); }
   // ===== المراحل المرنة: تغيير عدد الأشهر / إضافة / حذف / نسخ التوزيع =====
   document.querySelectorAll(".phaseMonthsInput").forEach(inp=>{
     inp.addEventListener("change", ()=>{ syncFormFromInputs(); render(); });
@@ -5074,7 +5104,8 @@ function recalcClientForm(){
     const r = resolvePhases(val, phs, miY);
     setText("lastInst_"+idx, fmt(r.lastInst)+" ر.ع");
     const lblEl = document.getElementById("lastInstLabel_"+idx);
-    if(lblEl) lblEl.textContent = lastInstLabelText(r.monthsSum, miY);
+    const ypNF = clientForm && clientForm.yearPlans[parseInt(idx,10)];
+    if(lblEl && !(ypNF && ypNF.noFlex)) lblEl.textContent = lastInstLabelText(r.monthsSum, miY);
     phaseInputs.forEach((pin,k)=>{
       const hintEl = document.getElementById(`phaseHint_${idx}_${pin.dataset.pi}`);
       if(!hintEl) return;
@@ -5120,7 +5151,8 @@ function recalcClientForm(){
         document.querySelectorAll(`.phaseMonthsInput[data-idx="${y-1}"]`).forEach(mi=>{ sum += Math.max(0, parseInt(mi.value,10)||0); });
         covered += sum + Math.max(0, miY - sum);
         parts.push(miY);
-        if(sum<1 || sum>cap) bad.push(arabicYear(y));
+        const ypY = clientForm && clientForm.yearPlans[y-1];
+        if(!(ypY && ypY.noFlex) && (sum<1 || sum>cap)) bad.push(arabicYear(y));
       }
       chkAll.innerHTML = (covered===totalM && !bad.length)
         ? `<span style="color:var(--ok);">✓ إجمالي الأشهر = ${totalM} = عدد الأقساط (${parts.join(" + ")})</span>`
@@ -5169,6 +5201,10 @@ function syncFormFromInputs(){
   document.querySelectorAll(".yearPctInput").forEach(inp=>{
     const idx = parseInt(inp.dataset.idx,10);
     if(clientForm.yearPlans[idx]) clientForm.yearPlans[idx].percent = inp.value;
+  });
+  document.querySelectorAll(".yearNoFlex").forEach(cb=>{
+    const yp = clientForm.yearPlans[parseInt(cb.dataset.idx,10)];
+    if(yp) yp.noFlex = cb.checked;
   });
   document.querySelectorAll(".phaseInput").forEach(inp=>{
     const idx = parseInt(inp.dataset.idx,10), pi = parseInt(inp.dataset.pi,10);
@@ -5263,7 +5299,11 @@ function saveClientForm(){
     const flexN = normFlexMonths(f.flexMonths);
     const yearEff = [], yearMonthsArr = [];
     for(let k=0;k<f.yearPlans.length;k++){
-      const phs = f.yearPlans[k].phases || [];
+      const phs = f.yearPlans[k].noFlex ? [] : (f.yearPlans[k].phases || []);
+      if(f.yearPlans[k].noFlex){
+        yearEff[k] = 0; yearMonthsArr[k] = monthsInYearOf(chequesCount, k+1);
+        continue;
+      }
       if(!phs.length || phs.some(ph=>phaseMonthsNum(ph)<1)){
         toast(`السنة ${arabicYear(k+1)}: كل مرحلة يجب أن تكون شهرًا واحدًا على الأقل`);
         return;
@@ -5283,10 +5323,11 @@ function saveClientForm(){
       const yManual = String(yp.amtManual??"").trim()!=="";
       const amount = yManual ? (parseFloat(yp.amtManual)||0) : remaining*(parseFloat(yp.percent)||0)/100;
       const percent = yManual ? (remaining>0 ? amount/remaining : 0) : (parseFloat(yp.percent)||0)/100;
-      const r = resolvePhases(amount, yp.phases, yearMonthsArr[k0]);
+      const r = resolvePhases(amount, yp.noFlex ? [] : yp.phases, yearMonthsArr[k0]);
       return {
         percent, amount, amtManual: yManual ? amount : null, lastInstallment:r.lastInst, flexMonths: yearEff[k0], yearMonths: yearMonthsArr[k0],
-        phases: yp.phases.map((ph,k)=>({ id: ph.id||uid("ph"), months: phaseMonthsNum(ph), amount: r.amounts[k], raw: ph.value || "" }))
+        noFlex: !!yp.noFlex,
+        phases: (yp.noFlex ? [] : yp.phases).map((ph,k)=>({ id: ph.id||uid("ph"), months: phaseMonthsNum(ph), amount: r.amounts[k], raw: ph.value || "" }))
       };
     });
 
@@ -5296,7 +5337,7 @@ function saveClientForm(){
       return;
     }
 
-    const mismatchIdx = yearPlans.findIndex((yp,k)=> yp.amount>0 && yearMonthsArr[k]-yearEff[k]===0 && Math.abs(resolvePhases(yp.amount, f.yearPlans[k].phases, yearMonthsArr[k]).leftover)>0.5);
+    const mismatchIdx = yearPlans.findIndex((yp,k)=> yp.amount>0 && yearMonthsArr[k]-yearEff[k]===0 && Math.abs(resolvePhases(yp.amount, f.yearPlans[k].noFlex ? [] : f.yearPlans[k].phases, yearMonthsArr[k]).leftover)>0.5);
     if(mismatchIdx>=0){
       toast(`السنة ${arabicYear(mismatchIdx+1)}: إجمالي المراحل لا يساوي إجمالي السنة — اترك مرحلة واحدة على الأقل صفرًا للحساب التلقائي`);
       return;
