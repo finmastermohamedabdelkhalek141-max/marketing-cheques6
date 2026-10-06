@@ -585,7 +585,26 @@
     margin-bottom:12px; background:#fbf9f4;
   }
   .year-block h4{ margin:0 0 12px; font-family:var(--serif); font-size:14.5px; font-weight:700; }
-  .phase-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:6px; }
+  .phase-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; margin-bottom:8px; }
+  .phase-card{ background:#fffdf8; border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .phase-card-head{ display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .phase-title{ font-weight:700; font-size:13.5px; color:var(--navy); }
+  .phase-range{ font-size:12px; color:var(--brass-dark); background:var(--brass-soft); border-radius:20px; padding:1px 9px; }
+  .phase-card-head .btn{ margin-inline-start:auto; }
+  .phase-toolbar{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:4px 0 10px; }
+  .phase-months-chk{ font-size:12.5px; }
+  .perm-editor{ border:2px solid var(--brass); }
+  .perm-screen{ border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; background:#fffdf8; }
+  .perm-screen.off{ opacity:.6; }
+  .perm-screen-head{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .perm-screen-head .grow{ flex:1; }
+  .perm-tools{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:6px 16px; }
+  .perm-check{ display:flex; align-items:center; gap:8px; font-size:13.5px; cursor:pointer; }
+  .perm-check.strong{ font-weight:700; font-size:14.5px; color:var(--navy); }
+  .perm-check input{ width:16px; height:16px; flex:none; }
+  .perm-yes{ color:var(--ok); font-weight:700; text-align:center; }
+  .perm-no{ color:#b9b3a5; text-align:center; }
+  .perm-screen-row td{ background:var(--navy-soft); font-weight:700; }
   @media (max-width:720px){ .phase-grid{ grid-template-columns:1fr; } }
   .toolbar .grow{ flex:1; min-width:200px; }
 
@@ -1721,6 +1740,7 @@ function normalizeState(){
   if(!state.nextCollectionSeq) state.nextCollectionSeq = 1;
   if(!state.userStatus || typeof state.userStatus !== "object") state.userStatus = {};
   if(typeof state.companyTaxNumber !== "string") state.companyTaxNumber = "";
+  if(!state.userPerms || typeof state.userPerms !== "object") state.userPerms = {};
 }
 function saveState(){
   localStorage.setItem(LS_KEY, JSON.stringify(state));
@@ -1847,9 +1867,96 @@ function findUser(code, password){
   return USERS.find(u => normCode(u.code)===normCode(code) && String(u.password)===String(password)) || null;
 }
 
+/* ============================= كتالوج الصلاحيات (شاشات + أدوات كل شاشة) ============================= */
+/* كل شاشة لها مجموعة أدوات (k = مفتاح الأداة، l = الاسم، d = القيمة الافتراضية للمستخدم قبل أي تخصيص).
+   الأدمن يملك كل الأدوات دائمًا. أي تخصيص يحدده الأدمن من شاشة «إدارة المستخدمين» يُحفظ في state.userPerms
+   ويتزامن مع السحابة ويُطبَّق فورًا على كل الأجهزة. */
+const _cm = (u,key)=> ((u && u.caps) || {})[key];
+const _full = k => (u => _cm(u,k)==="full");
+const PERM_CATALOG = [
+  { screen:"receipts", label:"إيصالات استلام الشيكات", tools:[
+    {k:"receipts.reprint", l:"عرض وإعادة طباعة الإيصال", d:()=>true},
+    {k:"receipts.export",  l:"تصدير Excel / Word", d:()=>true}
+  ]},
+  { screen:"cheques", label:"إدارة الشيكات", tools:[
+    {k:"cheques.fullDetails", l:"عرض التفاصيل المالية الكاملة (بطاقات الإجماليات وكل الأعمدة)", d:u=>_cm(u,"chequesMode")!=="register"},
+    {k:"cheques.register",    l:"تحديد الدفعات وتسجيل استلام شيك", d:u=>["full","register","selectRegisterNoPrint"].includes(_cm(u,"chequesMode"))},
+    {k:"cheques.printAfterSave", l:"طباعة الإيصال فور تسجيل الشيك", d:_full("chequesMode")},
+    {k:"cheques.printReceipt",l:"طباعة إيصال شيك مسجّل", d:_full("chequesMode")},
+    {k:"cheques.delCheque",   l:"حذف شيك مسجّل", d:_full("chequesMode")},
+    {k:"cheques.editInst",    l:"تعديل دفعة (القيمة / التاريخ / البيان / رقم الشيك)", d:_full("chequesMode")},
+    {k:"cheques.editTax",     l:"تعديل الضريبة والإجمالي داخل الجدول", d:_full("chequesMode")},
+    {k:"cheques.exportPlan",  l:"تصدير خطة السداد Excel / Word", d:u=>_cm(u,"chequesMode")!=="viewonly"},
+    {k:"cheques.printPlan",   l:"طباعة جدول السداد", d:_full("chequesMode")}
+  ]},
+  { screen:"collect", label:"تحصيل الشيكات", tools:[
+    {k:"collect.quick",        l:"التحصيل السريع بكود العميل", d:_full("collectMode")},
+    {k:"collect.collect",      l:"تحصيل شيك", d:_full("collectMode")},
+    {k:"collect.bounce",       l:"تسجيل ارتداد شيك", d:_full("collectMode")},
+    {k:"collect.reopen",       l:"إعادة الشيك لقيد التحصيل", d:_full("collectMode")},
+    {k:"collect.printReceipt", l:"طباعة إيصال التحصيل", d:_full("collectMode")},
+    {k:"collect.delete",       l:"حذف شيك نهائيًا", d:_full("collectMode")},
+    {k:"collect.purgeOrphans", l:"حذف شيكات العملاء المحذوفين", d:_full("collectMode")},
+    {k:"collect.export",       l:"تصدير Excel / Word", d:_full("collectMode")}
+  ]},
+  { screen:"clients", label:"العملاء وخطط السداد", tools:[
+    {k:"clients.viewList",  l:"عرض قائمة العملاء", d:_full("clientsMode")},
+    {k:"clients.add",       l:"إضافة عميل جديد", d:u=>["full","addonly"].includes(_cm(u,"clientsMode"))},
+    {k:"clients.edit",      l:"تعديل بيانات عميل وخطة سداده", d:_full("clientsMode")},
+    {k:"clients.delete",    l:"حذف عميل", d:_full("clientsMode")},
+    {k:"clients.editItems", l:"إضافة / حذف / ترتيب بنود الاستشاري والبنود الإضافية", d:_full("clientsMode")},
+    {k:"clients.export",    l:"تصدير قائمة العملاء Excel / Word", d:_full("clientsMode")}
+  ]},
+  { screen:"reportCheques", label:"تقرير الشيكات", tools:[
+    {k:"reportCheques.print",        l:"طباعة التقرير", d:()=>true},
+    {k:"reportCheques.export",       l:"تصدير Excel / Word", d:()=>true},
+    {k:"reportCheques.whatsapp",     l:"رسائل وإرسال واتساب", d:()=>true},
+    {k:"reportCheques.printReceipt", l:"طباعة إيصال الشيك من التقرير", d:_full("chequesMode")}
+  ]},
+  { screen:"reportClients", label:"تقرير العملاء", tools:[
+    {k:"reportClients.print",  l:"طباعة التقرير", d:()=>true},
+    {k:"reportClients.export", l:"تصدير Excel / Word", d:()=>true}
+  ]}
+];
+const ADMIN_ONLY_SCREENS = ["users","settings"];
+const SCREEN_ORDER = ["receipts","cheques","collect","clients","reportCheques","reportClients","users","settings"];
+const SCREEN_LABELS = {users:"إدارة المستخدمين", settings:"إعدادات الشركة"};
+PERM_CATALOG.forEach(sc=>{ SCREEN_LABELS[sc.screen] = sc.label; });
+const ALL_TOOL_KEYS = PERM_CATALOG.reduce((a,sc)=>a.concat(sc.tools.map(t=>t.k)),[]);
+
+function userPermRecord(u){
+  return (u && state.userPerms && state.userPerms[normCode(u.code)]) || null;
+}
+function defaultScreens(u){ return (u.perms||[]).slice(); }
+function defaultTools(u){
+  if(u.role==="admin") return ALL_TOOL_KEYS.slice();
+  const out = [];
+  PERM_CATALOG.forEach(sc=>{ sc.tools.forEach(t=>{ if(t.d(u)) out.push(t.k); }); });
+  return out;
+}
+function effScreens(u){
+  if(!u) return [];
+  if(u.role==="admin") return u.perms.slice();
+  const rec = userPermRecord(u);
+  const valid = PERM_CATALOG.map(sc=>sc.screen);
+  const list = (rec && Array.isArray(rec.screens)) ? rec.screens : defaultScreens(u);
+  return SCREEN_ORDER.filter(sn=>list.includes(sn) && valid.includes(sn));
+}
+function effTools(u){
+  if(!u) return [];
+  if(u.role==="admin") return ALL_TOOL_KEYS.slice();
+  const rec = userPermRecord(u);
+  return (rec && Array.isArray(rec.tools)) ? rec.tools.filter(k=>ALL_TOOL_KEYS.includes(k)) : defaultTools(u);
+}
+function can(toolKey){
+  if(!currentUser) return false;
+  if(currentUser.role==="admin") return true;
+  return effTools(currentUser).includes(toolKey);
+}
+
 function hasPerm(viewName){
   if(!currentUser) return false;
-  return currentUser.perms.includes(viewName);
+  return effScreens(currentUser).includes(viewName);
 }
 
 function caps(){
@@ -1874,20 +1981,20 @@ function toggleUserActive(code){
 
 // موظف CFO11: يدخل شاشة الشيكات فقط، بصلاحية محدودة داخلها (بحث + تسجيل استلام شيك وطباعة إيصاله فقط)
 function isLimitedChequesRole(){
-  return caps().chequesMode === "register";
+  return !can("cheques.fullDetails");
 }
 // CFO11 (الآن «مسؤول»): يرى كل الأعمدة والتفاصيل الكاملة في شاشة إدارة الشيكات، ومسموح له بتحديد
 // الدفعة وتسجيل رقم الشيك واسم البنك، لكن غير مصرح له بالطباعة أو التعديل أو الحذف
 function isSelectRegisterNoPrintRole(){
-  return caps().chequesMode === "selectRegisterNoPrint";
+  return can("cheques.register") && !can("cheques.printAfterSave");
 }
 // موظف CMO11: يدخل شاشة إدارة الشيكات فقط للبحث والعرض بدون أي تفاعل (تحديد/تسجيل/تعديل/حذف/طباعة)
 function isViewOnlyChequesRole(){
-  return caps().chequesMode === "viewonly";
+  return !can("cheques.register");
 }
 // موظف CMO11: يدخل شاشة العملاء وخطط السداد لإضافة عميل جديد فقط، بدون تعديل أو حذف لعملاء موجودين
 function isAddOnlyClientsRole(){
-  return caps().clientsMode === "addonly";
+  return can("clients.add") && !can("clients.viewList");
 }
 // صلاحية الأدمن: التحكم الكامل في بنود خطط السداد (إضافة/حذف/ترتيب) للأقساط الاعتيادية والاستشاري
 function isAdmin(){
@@ -1896,7 +2003,7 @@ function isAdmin(){
 
 function firstAllowedView(){
   if(!currentUser) return null;
-  return currentUser.perms[0] || null;
+  return effScreens(currentUser)[0] || null;
 }
 
 function applyPermissionsToUI(){
@@ -2474,11 +2581,7 @@ function buildPlan(client){
       for(let m=1; m<=12; m++){
         const due = addMonthsAnchored(startDate, monthIndex);
         monthIndex++;
-        let amt;
-        if(m<=3) amt = yp.phase1||0;
-        else if(m<=6) amt = yp.phase2||0;
-        else if(m<=11) amt = yp.phase3||0;
-        else amt = yp.lastInstallment||0;
+        const amt = monthAmountForYearPlan(yp, m);
         installments.push({
           id: client.id+"_y"+y+"m"+m, seq: seq++, type:"قسط شهري",
           label: `السنة ${arabicYear(y)} — دفعة رقم ${m}`,
@@ -2676,7 +2779,7 @@ function setView(v){
     reportCheques:["تقرير الشيكات","كل الشيكات المستلمة عبر جميع العملاء"],
     reportClients:["تقرير العملاء","ملخص الحالة المالية لكل عميل"],
     receipts:["إيصالات استلام الشيكات","السجل الرسمي الموثّق لكل إيصال صادر عن استلام شيك من عميل"],
-    users:["إدارة المستخدمين","تفعيل أو إيقاف صلاحية الدخول لأي كود مستخدم"],
+    users:["إدارة المستخدمين","تفعيل أو إيقاف الأكواد وتحديد الشاشات والأدوات المسموحة لكل مستخدم"],
     settings:["إعدادات الشركة","بيانات الشركة الرسمية التي تظهر في المستندات المطبوعة"],
   };
   document.getElementById("pageTitle").textContent = titles[v][0];
@@ -2686,8 +2789,60 @@ function setView(v){
 }
 
 /* ============================= RENDER ROOT ============================= */
+/* إزالة أي أداة غير مسموحة للمستخدم الحالي من الشاشة قبل ربط الأحداث (فلا يبقى لها زر ولا مستمع) */
+const TOOL_DOM = {
+  "collect.collect":      ["[data-collect]"],
+  "collect.bounce":       ["[data-bounce]"],
+  "collect.reopen":       ["[data-reopen]"],
+  "collect.printReceipt": ["[data-print-collection]"],
+  "collect.delete":       ["#collectTable [data-del-cheque]"],
+  "collect.export":       ["#btnExportCollectExcel","#btnExportCollectWord"],
+  "clients.add":          ["#btnNewClient"],
+  "clients.edit":         ["[data-edit-client]"],
+  "clients.delete":       ["[data-del-client]"],
+  "clients.export":       ["#btnExportClientsListExcel","#btnExportClientsListWord"],
+  "clients.editItems":    ["#btnCsAddRow","#btnSiAddRow","[data-cs-up]","[data-cs-down]","[data-cs-del]","[data-si-up]","[data-si-down]","[data-si-del]"],
+  "reportCheques.print":  ["#btnPrintChqReport"],
+  "reportCheques.export": ["#btnExportChqExcel","#btnExportChqWord"],
+  "reportClients.print":  ["#btnPrintClientsReport"],
+  "reportClients.export": ["#btnExportClientsExcel","#btnExportClientsWord"],
+  "receipts.reprint":     ["[data-reprint]"],
+  "receipts.export":      ["#btnExportReceiptsExcel","#btnExportReceiptsWord"]
+};
+function pruneEmptyLastCol(tableId){
+  const table = document.getElementById(tableId);
+  if(!table || !table.tBodies.length) return;
+  const rows = Array.from(table.tBodies[0].rows);
+  if(!rows.length) return;
+  const empty = rows.every(r=>{
+    const c = r.cells[r.cells.length-1];
+    return c && !c.querySelector("button,a,input,select") && !c.textContent.trim();
+  });
+  if(!empty) return;
+  table.querySelectorAll("tr").forEach(r=>{ if(r.cells.length) r.deleteCell(r.cells.length-1); });
+}
+function enforceToolPerms(){
+  if(!currentUser || currentUser.role==="admin") return;
+  const app = document.getElementById("app");
+  Object.keys(TOOL_DOM).forEach(k=>{
+    if(can(k)) return;
+    TOOL_DOM[k].forEach(sel=>{ app.querySelectorAll(sel).forEach(el=>el.remove()); });
+  });
+  pruneEmptyLastCol("collectTable");
+  pruneEmptyLastCol("clientsListTable");
+}
+
 function render(){
   const app = document.getElementById("app");
+  if(currentUser){
+    // الصلاحيات قد تتغير لحظيًا (تعديل من الأدمن عبر السحابة) — حدّث القائمة الجانبية وتأكد أن الشاشة الحالية ما زالت مسموحة
+    applyPermissionsToUI();
+    if(!hasPerm(view)){
+      const v = firstAllowedView();
+      if(v && v!==view){ setView(v); return; }
+      if(!v){ app.innerHTML = `<div class="card"><h2>لا توجد صلاحيات</h2><p class="hint">لم يتم منحك صلاحية الوصول لأي شاشة. الرجاء مراجعة الأدمن.</p></div>`; return; }
+    }
+  }
   if(view==="cheques") app.innerHTML = renderChequesScreen();
   else if(view==="collect") app.innerHTML = renderCollectScreen();
   else if(view==="clients") app.innerHTML = renderClientsScreen();
@@ -2696,6 +2851,7 @@ function render(){
   else if(view==="receipts") app.innerHTML = renderReceiptsScreen();
   else if(view==="users") app.innerHTML = renderUsersScreen();
   else if(view==="settings") app.innerHTML = renderSettingsScreen();
+  enforceToolPerms();
   bindEvents();
 }
 
@@ -2731,11 +2887,15 @@ function renderChequesScreen(){
   // CFO11 (isSelectRegisterNoPrintRole، «مسؤول»): يرى الجدول الكامل بكل تفاصيله، ويقدر يحدد الدفعة ويسجّل
   //   رقم الشيك واسم البنك، لكن بدون طباعة أو تعديل أو حذف.
   // CMO11 (isViewOnlyChequesRole): يرى الجدول الكامل بكل أعمدته، للعرض فقط بدون أي أداة تفاعل (تحديد/تسجيل/تعديل/حذف/طباعة).
-  const chqViewOnly = isViewOnlyChequesRole();
-  const chqSelectRegisterNoPrint = isSelectRegisterNoPrintRole();
+  // كل أداة الآن لها صلاحية مستقلة يحددها الأدمن من شاشة «إدارة المستخدمين»
   const chqNoActions = isLimitedChequesRole();
-  const chqNoSelect = chqViewOnly;
-  const chqReadOnlyRow = !isAdmin(); // التعديل والحذف وطباعة الإيصال في شاشة الشيكات حصرًا للأدمن فقط
+  const chqNoSelect = !can("cheques.register");
+  const chqNoExport = !can("cheques.exportPlan");
+  const chqNoPrintPlan = !can("cheques.printPlan");
+  const chqNoEditInst = !can("cheques.editInst");
+  const chqNoEditTax = !can("cheques.editTax");
+  const chqNoPrintRcpt = !can("cheques.printReceipt");
+  const chqNoDelete = !can("cheques.delCheque");
 
   html += `
   <div class="card">
@@ -2764,10 +2924,10 @@ function renderChequesScreen(){
     <div class="toolbar" style="margin-bottom:2px;">
       <h2 style="margin:0;">خطة السداد والدفعات</h2>
       <div class="grow"></div>
-      ${chqViewOnly ? "" : `
+      ${chqNoExport ? "" : `
       <button class="btn btn-ghost btn-sm no-print" id="btnExportPlanExcel">تصدير Excel</button>
       <button class="btn btn-ghost btn-sm no-print" id="btnExportPlanWord">تصدير Word</button>`}
-      ${chqReadOnlyRow ? "" : `
+      ${chqNoPrintPlan ? "" : `
       <button class="btn btn-ghost btn-sm no-print" id="btnPrintPlan">طباعة جدول السداد</button>`}
     </div>
     <p class="hint">حدد دفعة أو أكثر مستحقة، ثم سجّل رقم الشيك المستلم من العميل لاستخراج إيصال استلام. ملحوظة: عمود «المسدد» يعكس فقط الشيكات التي تم تحصيلها فعليًا من البنك (من شاشة تحصيل الشيكات) — أما الشيك المستلم ولم يُحصَّل بعد فيمنع تسجيل شيك آخر لنفس الدفعة، لكنه لا يُحتسب مسددًا حتى يتم تحصيله. يمكنك تعديل قيمة أو تاريخ استحقاق أي دفعة يدويًا بالضغط على «تعديل».</p>
@@ -2779,7 +2939,7 @@ function renderChequesScreen(){
           <th>البيان</th><th>تاريخ الاستحقاق</th><th>رقم الشيك</th>
           ` : `
           <th>م</th><th>البيان</th><th>نوع الدفعة</th><th>تاريخ الاستحقاق</th>
-          <th>قيمة الدفعة قبل الضريبة</th><th>الضريبة</th><th>الإجمالي شامل الضريبة</th><th>المسدد</th><th>رقم الشيك</th><th>الحالة</th>${chqReadOnlyRow ? "" : `<th class="no-print">تعديل</th>`}
+          <th>قيمة الدفعة قبل الضريبة</th><th>الضريبة</th><th>الإجمالي شامل الضريبة</th><th>المسدد</th><th>رقم الشيك</th><th>الحالة</th>${chqNoEditInst ? "" : `<th class="no-print">تعديل</th>`}
           `}
         </tr></thead>
         <tbody>
@@ -2795,9 +2955,8 @@ function renderChequesScreen(){
               ? linkedCheques.map(chq=>`
                   <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;">
                     <span>${esc(chq.chequeNumber)}${chq.bank?` — ${esc(chq.bank)}`:""} ${chequeStatusBadge(chq)}</span>
-                    ${chqReadOnlyRow ? "" : `
-                    <button class="btn btn-ghost btn-sm no-print" data-print-receipt="${chq.id}" title="طباعة إيصال هذا الشيك" style="padding:2px 8px;">🖨️</button>
-                    <button class="btn btn-danger btn-sm no-print" data-del-cheque="${chq.id}" title="حذف هذا الشيك" style="padding:2px 8px;">🗑️</button>`}
+                    ${chqNoPrintRcpt ? "" : `<button class="btn btn-ghost btn-sm no-print" data-print-receipt="${chq.id}" title="طباعة إيصال هذا الشيك" style="padding:2px 8px;">🖨️</button>`}
+                    ${chqNoDelete ? "" : `<button class="btn btn-danger btn-sm no-print" data-del-cheque="${chq.id}" title="حذف هذا الشيك" style="padding:2px 8px;">🗑️</button>`}
                   </div>`).join("")
               : ((inst.chequeNumberOverride||inst.bankOverride)
                   ? `<span>${esc(inst.chequeNumberOverride||"—")}${inst.bankOverride?` — ${esc(inst.bankOverride)}`:""} <span class="muted" title="بيانات مُدخلة يدويًا، دون شيك مسجَّل فعليًا">✎</span></span>`
@@ -2814,16 +2973,16 @@ function renderChequesScreen(){
               <td class="muted">${esc(inst.type)}</td>
               <td class="num">${fmtDate(inst.dueDate)}</td>
               <td class="num">${fmt(inst.amount)}</td>
-              <td class="num" data-print-value="${fmt(inst.taxAmount)}">${chqReadOnlyRow
+              <td class="num" data-print-value="${fmt(inst.taxAmount)}">${chqNoEditTax
                 ? `${fmt(inst.taxAmount)} ${inst.taxEdited?`<span class="muted" title="تم تعديلها يدويًا">✎</span>`:""}`
                 : `<input type="number" step="0.001" class="instTaxInput" data-inst="${inst.id}" value="${inst.taxAmount}" style="width:90px;text-align:center;">`}</td>
-              <td class="num" data-print-value="${fmt(inst.totalWithTax)}">${chqReadOnlyRow
+              <td class="num" data-print-value="${fmt(inst.totalWithTax)}">${chqNoEditTax
                 ? `${fmt(inst.totalWithTax)} ${inst.totalEdited?`<span class="muted" title="تم تعديلها يدويًا">✎</span>`:""}`
                 : `<input type="number" step="0.001" class="instTotalInput" data-inst="${inst.id}" value="${inst.totalWithTax}" style="width:100px;text-align:center;">`}</td>
               <td class="num">${fmt(inst.paidAmount)} ${inst.paidAmount>0 && remaining>0 ? `<span class="muted">(متبقي ${fmt(remaining)})</span>`:""}</td>
               <td class="num">${chqCell}</td>
               <td>${statusBadge(st)}</td>
-              ${chqReadOnlyRow ? "" : `<td class="no-print"><button class="btn btn-ghost btn-sm" data-edit-inst="${inst.id}">تعديل</button></td>`}
+              ${chqNoEditInst ? "" : `<td class="no-print"><button class="btn btn-ghost btn-sm" data-edit-inst="${inst.id}">تعديل</button></td>`}
             </tr>`;
           }).join("")}
         </tbody>
@@ -3089,9 +3248,9 @@ function renderCollectScreen(){
   const counts = { pending:0, collected:0, bounced:0 };
   state.cheques.forEach(c=>{ counts[c.status||"pending"] = (counts[c.status||"pending"]||0)+1; });
 
-  let html = renderQuickCollectCard();
+  let html = can("collect.quick") ? renderQuickCollectCard() : "";
   const orphanCount = state.cheques.filter(chq=>!state.clients.some(c=>c.id===chq.clientId)).length;
-  if(orphanCount>0){
+  if(orphanCount>0 && can("collect.purgeOrphans")){
     html += `<div class="card" style="border:2px solid var(--warn);">
       <h2 style="color:var(--warn);">شيكات لعملاء محذوفين</h2>
       <p class="hint">يوجد ${orphanCount} شيك/شيكات مسجلة لعملاء تم حذفهم سابقًا. يمكنك حذفها نهائيًا من هنا.</p>
@@ -3363,7 +3522,9 @@ function openBounceModal(chqId){
 
 /* ============================= SCREEN: CLIENTS ============================= */
 let clientForm = null; // when editing/adding
-function blankYearPlan(){ return {percent:"", phase1:"", phase2:"", phase3:""}; }
+function newPhase(months, value){ return { id: uid("ph"), months: months, value: value==null ? "" : value }; }
+function defaultPhases(){ return [ newPhase(3), newPhase(3), newPhase(5) ]; }
+function blankYearPlan(){ return { percent:"", phases: defaultPhases() }; }
 
 /* Default rows for the "consultant" installment schedule, mirroring the reference
    22-item breakdown supplied by the consultant. Items 1 (دفعة الحجز) and 2 (دفعة المقدم)
@@ -3415,25 +3576,63 @@ function yearsFromCheques(count){
    as an equal share of what's left after manually-entered phases, split evenly across
    its own months plus the always-auto final (12th) month. If all three phases are
    manual, this degenerates to the original behavior (last month = pure leftover). */
-const PHASE_MONTHS = [3,3,5];
-function resolveYearPhases(yearVal, p1raw, p2raw, p3raw){
-  const raws = [p1raw, p2raw, p3raw];
+/* ===== المراحل المرنة: عدد المراحل وعدد أشهر كل مرحلة يحددهما المستخدم لكل سنة ===== */
+/* السنة = 12 قسطًا: الأشهر 1..11 موزّعة على المراحل (مجموع أشهر المراحل = 11)، والشهر 12 هو القسط الأخير
+   ويُحسب تلقائيًا دائمًا. أي مرحلة قيمتها 0 أو فارغة تُحسب تلقائيًا بالتساوي من المبلغ المتبقي بعد خصم
+   المراحل اليدوية (ويشاركها القسط الأخير في هذا التوزيع). */
+const TOTAL_FLEX_MONTHS = 11;
+function phaseMonthsNum(ph){ return Math.max(0, parseInt(ph && ph.months, 10) || 0); }
+function phasesMonthsSum(phases){ return (phases||[]).reduce((t,ph)=>t+phaseMonthsNum(ph),0); }
+function resolvePhases(yearVal, phases){
   let manualTotal = 0, autoMonths = 0;
-  const isAuto = [false,false,false];
-  raws.forEach((r,i)=>{
-    const v = parseFloat(r)||0;
-    if(v>0){ manualTotal += v*PHASE_MONTHS[i]; }
-    else { autoMonths += PHASE_MONTHS[i]; isAuto[i] = true; }
+  const isAuto = [];
+  (phases||[]).forEach(ph=>{
+    const mo = phaseMonthsNum(ph);
+    const v = parseFloat(ph.value)||0;
+    if(v>0){ manualTotal += v*mo; isAuto.push(false); }
+    else { autoMonths += mo; isAuto.push(true); }
   });
   const remaining = yearVal - manualTotal;
   const autoRate = remaining/(autoMonths+1);
-  const resolved = raws.map((r,i)=>{
-    const v = parseFloat(r)||0;
-    return v>0 ? v : autoRate;
-  });
-  const flexTotal = resolved[0]*PHASE_MONTHS[0] + resolved[1]*PHASE_MONTHS[1] + resolved[2]*PHASE_MONTHS[2];
-  const lastInst = yearVal-flexTotal;
-  return { phase1:resolved[0], phase2:resolved[1], phase3:resolved[2], lastInst, isAuto, autoRate };
+  const amounts = (phases||[]).map((ph,i)=> isAuto[i] ? autoRate : (parseFloat(ph.value)||0));
+  const flexTotal = amounts.reduce((t,a,i)=>t+a*phaseMonthsNum(phases[i]),0);
+  return { amounts, isAuto, autoRate, flexTotal, lastInst: yearVal-flexTotal, monthsSum: phasesMonthsSum(phases) };
+}
+function arabicOrdinalFem(n){
+  return ["الأولى","الثانية","الثالثة","الرابعة","الخامسة","السادسة","السابعة","الثامنة","التاسعة","العاشرة","الحادية عشرة"][n-1] || String(n);
+}
+function phaseRangeLabel(phases, idx){
+  let start = 1;
+  for(let k=0;k<idx;k++) start += phaseMonthsNum(phases[k]);
+  const mo = phaseMonthsNum(phases[idx]);
+  if(mo<=0) return "—";
+  return mo===1 ? `الشهر ${start}` : `الأشهر ${start}–${start+mo-1}`;
+}
+/* يحوّل خطة سنة مخزّنة (بالشكل الجديد أو القديم 3+3+5) إلى شكل مراحل النموذج */
+function storedPhasesToForm(yp){
+  if(Array.isArray(yp.phases) && yp.phases.length){
+    return yp.phases.map(ph=>({ id: ph.id||uid("ph"), months: ph.months, value: (ph.raw ?? ph.value ?? "") }));
+  }
+  return [
+    newPhase(3, yp.phase1Raw ?? (yp.phase1 ?? "")),
+    newPhase(3, yp.phase2Raw ?? (yp.phase2 ?? "")),
+    newPhase(5, yp.phase3Raw ?? (yp.phase3 ?? ""))
+  ];
+}
+/* قيمة قسط الشهر m (1..12) من خطة سنة مخزّنة — تدعم الشكل الجديد والقديم */
+function monthAmountForYearPlan(yp, m){
+  if(m>=12) return yp.lastInstallment||0;
+  if(Array.isArray(yp.phases) && yp.phases.length){
+    let acc = 0;
+    for(const ph of yp.phases){
+      acc += phaseMonthsNum(ph);
+      if(m<=acc) return ph.amount||0;
+    }
+    return 0;
+  }
+  if(m<=3) return yp.phase1||0;
+  if(m<=6) return yp.phase2||0;
+  return yp.phase3||0;
 }
 
 function renderClientsScreen(){
@@ -3546,7 +3745,7 @@ function renderClientForm(){
   }
 
   // بنود إضافية (بيان + نسبة) فوق جدول السنوات — للأدمن فقط إضافة/حذف/ترتيب، والموظف يشوف بس
-  const adminCanEditItems = isAdmin();
+  const adminCanEditItems = can("clients.editItems");
   let extraStandardRows = "";
   (f.extraStandardItems||[]).forEach((row,i)=>{
     extraStandardRows += `
@@ -3570,26 +3769,35 @@ function renderClientForm(){
 
   let phaseBlocks = "";
   for(let i=0;i<f.years;i++){
-    const yp = f.yearPlans[i] || blankYearPlan();
+    const yp = f.yearPlans[i] || (f.yearPlans[i] = blankYearPlan());
+    if(!Array.isArray(yp.phases) || !yp.phases.length) yp.phases = defaultPhases();
+    const phases = yp.phases;
     phaseBlocks += `
       <div class="year-block">
         <h4>السنة ${arabicYear(i+1)} <span class="muted" style="font-weight:400;font-size:12.5px;">— إجمالي السنة: <span id="yearVal2_${i}">0</span> ر.ع</span></h4>
         <div class="phase-grid">
-          <div class="field" style="margin-bottom:0;">
-            <label>المرحلة الأولى (أول 3 أشهر) — قيمة القسط</label>
-            <input type="number" step="0.001" class="phase1Input" data-idx="${i}" value="${esc(yp.phase1??"")}" placeholder="اتركه 0 للحساب التلقائي">
-            <div class="import-hint" id="phase1Hint_${i}"></div>
-          </div>
-          <div class="field" style="margin-bottom:0;">
-            <label>المرحلة الثانية (تاني 3 أشهر) — قيمة القسط</label>
-            <input type="number" step="0.001" class="phase2Input" data-idx="${i}" value="${esc(yp.phase2??"")}" placeholder="اتركه 0 للحساب التلقائي">
-            <div class="import-hint" id="phase2Hint_${i}"></div>
-          </div>
-          <div class="field" style="margin-bottom:0;">
-            <label>المرحلة الثالثة (آخر 5 أشهر) — قيمة القسط</label>
-            <input type="number" step="0.001" class="phase3Input" data-idx="${i}" value="${esc(yp.phase3??"")}" placeholder="اتركه 0 للحساب التلقائي">
-            <div class="import-hint" id="phase3Hint_${i}"></div>
-          </div>
+          ${phases.map((ph,pi)=>`
+          <div class="phase-card">
+            <div class="phase-card-head">
+              <span class="phase-title">المرحلة ${arabicOrdinalFem(pi+1)}</span>
+              <span class="phase-range" id="phaseRange_${i}_${pi}">${phaseRangeLabel(phases,pi)}</span>
+              ${phases.length>1 ? `<button type="button" class="btn btn-danger btn-sm" data-phase-del="${i}:${pi}" title="حذف هذه المرحلة">حذف</button>` : ""}
+            </div>
+            <div class="field" style="margin-bottom:8px;">
+              <label>عدد الأشهر</label>
+              <input type="number" min="1" max="11" step="1" class="phaseMonthsInput" data-idx="${i}" data-pi="${pi}" value="${esc(ph.months??"")}">
+            </div>
+            <div class="field" style="margin-bottom:0;">
+              <label>قيمة القسط الشهري</label>
+              <input type="number" step="0.001" class="phaseInput" data-idx="${i}" data-pi="${pi}" value="${esc(ph.value??"")}" placeholder="اتركه 0 للحساب التلقائي">
+              <div class="import-hint" id="phaseHint_${i}_${pi}"></div>
+            </div>
+          </div>`).join("")}
+        </div>
+        <div class="phase-toolbar no-print">
+          <button type="button" class="btn btn-ghost btn-sm" data-phase-add="${i}">+ إضافة مرحلة</button>
+          ${f.years>1 ? `<button type="button" class="btn btn-ghost btn-sm" data-phase-copy="${i}" title="يطبّق نفس عدد المراحل وأشهر كل مرحلة على باقي السنوات (وتعود قيمها للحساب التلقائي)">تطبيق نفس توزيع الأشهر على باقي السنوات</button>` : ""}
+          <span class="phase-months-chk" id="phaseMonthsChk_${i}"></span>
         </div>
         <div class="calc-row">
           <span class="k">القسط الأخير (الشهر 12) — يُحسب تلقائيًا دائمًا</span>
@@ -3842,6 +4050,7 @@ function buildWhatsAppMessage(chq, cl){
 
 /* ============================= SCREEN: REPORTS ============================= */
 function renderChequesReport(){
+  const rWa = can("reportCheques.whatsapp"), rRc = can("reportCheques.printReceipt");
   const allRows = state.cheques.slice().sort((a,b)=>a.seq-b.seq).map(chq=>{
     const cl = state.clients.find(c=>c.id===chq.clientId);
     return {chq, cl};
@@ -3912,7 +4121,7 @@ function renderChequesReport(){
 
   html += `<div class="table-wrap"><table id="chqReportTable"><thead><tr>
     <th>م</th><th>كود العميل</th><th>اسم العميل</th><th>رقم هاتف العميل</th><th>رقم الشيك</th><th>البنك</th>
-    <th>نوع الدفعة</th><th>تاريخ الاستلام</th><th>تاريخ استحقاق الشيك</th><th>القيمة</th><th>حالة التحصيل</th><th>تاريخ التحصيل</th><th>رسالة واتساب</th><th class="no-print">إرسال</th><th class="no-print perm-admin-only">إيصال</th>
+    <th>نوع الدفعة</th><th>تاريخ الاستلام</th><th>تاريخ استحقاق الشيك</th><th>القيمة</th><th>حالة التحصيل</th><th>تاريخ التحصيل</th>${rWa ? `<th>رسالة واتساب</th><th class="no-print">إرسال</th>` : ""}${rRc ? `<th class="no-print">إيصال</th>` : ""}
   </tr></thead><tbody>
     ${rows.map((r,i)=>{
       const plan = r.cl ? buildPlan(r.cl) : [];
@@ -3937,13 +4146,13 @@ function renderChequesReport(){
         <td class="num">${fmt(r.chq.amount)}</td>
         <td>${chequeStatusBadge(r.chq)}</td>
         <td class="num">${r.chq.status==="collected" ? fmtDate(r.chq.collectedDate) : "—"}</td>
-        <td style="white-space:pre-line;min-width:260px;font-size:12.5px;">${esc(waMsg)}</td>
-        <td class="no-print">${waLink ? `<a class="btn btn-navy btn-sm" href="${waLink}" target="_blank" rel="noopener" style="text-decoration:none;">واتساب</a>` : `<span class="muted">لا يوجد هاتف</span>`}</td>
-        <td class="no-print perm-admin-only"><button class="btn btn-ghost btn-sm" data-print-any-receipt="${r.chq.id}" title="طباعة أي إيصال متاح لهذا الشيك">🖨️ طباعة</button></td>
+        ${rWa ? `<td style="white-space:pre-line;min-width:260px;font-size:12.5px;">${esc(waMsg)}</td>
+        <td class="no-print">${waLink ? `<a class="btn btn-navy btn-sm" href="${waLink}" target="_blank" rel="noopener" style="text-decoration:none;">واتساب</a>` : `<span class="muted">لا يوجد هاتف</span>`}</td>` : ""}
+        ${rRc ? `<td class="no-print"><button class="btn btn-ghost btn-sm" data-print-any-receipt="${r.chq.id}" title="طباعة أي إيصال متاح لهذا الشيك">🖨️ طباعة</button></td>` : ""}
       </tr>
     `;}).join("")}
   </tbody>
-  <tfoot><tr style="font-weight:700;"><td colspan="9">الإجمالي (${rows.length} شيك)</td><td class="num">${fmt(totalAmt)}</td><td></td><td></td><td></td><td class="no-print"></td><td class="no-print perm-admin-only"></td></tr></tfoot>
+  <tfoot><tr style="font-weight:700;"><td colspan="9">الإجمالي (${rows.length} شيك)</td><td class="num">${fmt(totalAmt)}</td><td></td><td></td>${rWa ? `<td></td><td class="no-print"></td>` : ""}${rRc ? `<td class="no-print"></td>` : ""}</tr></tfoot>
   </table></div>
   <div class="table-total-words">إجمالي قيمة الشيكات كتابة: ${esc(totalAmtWords)}</div>
   </div>`;
@@ -4303,7 +4512,7 @@ function saveCheque(){
   toast("تم حفظ الشيك بنجاح");
   chequeSearchState.selectedInstallments = {};
   // CFO11 («مسؤول» بصلاحية selectRegisterNoPrint): غير مصرح له بالطباعة، فلا نفتح له نافذة الإيصال بعد الحفظ
-  if(!isSelectRegisterNoPrintRole()){
+  if(can("cheques.printAfterSave")){
     openReceipt(cheque, c, allocations.map(a=>plan.find(i=>i.id===a.installmentId)));
   }
   render();
@@ -4331,9 +4540,7 @@ function bindClientsEvents(){
         chequesCount: c.chequesCount!=null ? c.chequesCount : (c.years*12),
         yearPlans: (c.yearPlans||[]).map(yp=>({
           percent: yp.percent!=null ? (yp.percent*100) : "",
-          phase1: yp.phase1Raw ?? (yp.phase1 ?? ""),
-          phase2: yp.phase2Raw ?? (yp.phase2 ?? ""),
-          phase3: yp.phase3Raw ?? (yp.phase3 ?? "")
+          phases: storedPhasesToForm(yp)
         })),
         installmentMode: c.installmentMode || "standard",
         consultantSchedule: (c.consultantSchedule && c.consultantSchedule.length)
@@ -4394,14 +4601,14 @@ function bindClientsEvents(){
   // إضافة/حذف/ترتيب بنود جدول الاستشاري: للأدمن فقط (الموظف يشوف الجدول بدون هذه الأزرار أصلًا،
   // لكن نتحقق من الصلاحية هنا أيضًا كخط دفاع ثانٍ)
   const csAddBtn = document.getElementById("btnCsAddRow");
-  if(csAddBtn && isAdmin()){
+  if(csAddBtn && can("clients.editItems")){
     csAddBtn.addEventListener("click", ()=>{
       syncFormFromInputs();
       clientForm.consultantSchedule.push({ id: uid("cs"), label:"", percent:"" });
       render();
     });
   }
-  if(isAdmin()){
+  if(can("clients.editItems")){
     document.querySelectorAll("[data-cs-del]").forEach(btn=>{
       btn.addEventListener("click", ()=>{
         syncFormFromInputs();
@@ -4429,7 +4636,7 @@ function bindClientsEvents(){
 
   // إضافة/حذف/ترتيب البنود الإضافية على الأقساط الاعتيادية: للأدمن فقط
   const siAddBtn = document.getElementById("btnSiAddRow");
-  if(siAddBtn && isAdmin()){
+  if(siAddBtn && can("clients.editItems")){
     siAddBtn.addEventListener("click", ()=>{
       syncFormFromInputs();
       if(!Array.isArray(clientForm.extraStandardItems)) clientForm.extraStandardItems = [];
@@ -4437,7 +4644,7 @@ function bindClientsEvents(){
       render();
     });
   }
-  if(isAdmin()){
+  if(can("clients.editItems")){
     document.querySelectorAll("[data-si-del]").forEach(btn=>{
       btn.addEventListener("click", ()=>{
         syncFormFromInputs();
@@ -4462,6 +4669,44 @@ function bindClientsEvents(){
       });
     });
   }
+
+  // ===== المراحل المرنة: تغيير عدد الأشهر / إضافة / حذف / نسخ التوزيع =====
+  document.querySelectorAll(".phaseMonthsInput").forEach(inp=>{
+    inp.addEventListener("change", ()=>{ syncFormFromInputs(); render(); });
+  });
+  document.querySelectorAll("[data-phase-add]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      syncFormFromInputs();
+      const i = parseInt(btn.dataset.phaseAdd,10);
+      const yp = clientForm.yearPlans[i]; if(!yp) return;
+      const rest = TOTAL_FLEX_MONTHS - phasesMonthsSum(yp.phases);
+      yp.phases.push(newPhase(rest>0 ? rest : 1));
+      render();
+    });
+  });
+  document.querySelectorAll("[data-phase-del]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      syncFormFromInputs();
+      const [i,pi] = btn.dataset.phaseDel.split(":").map(n=>parseInt(n,10));
+      const yp = clientForm.yearPlans[i];
+      if(!yp || yp.phases.length<=1) return;
+      yp.phases.splice(pi,1);
+      render();
+    });
+  });
+  document.querySelectorAll("[data-phase-copy]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      syncFormFromInputs();
+      const src = clientForm.yearPlans[parseInt(btn.dataset.phaseCopy,10)];
+      if(!src) return;
+      clientForm.yearPlans.forEach(yp=>{
+        if(yp===src) return;
+        yp.phases = src.phases.map(ph=>newPhase(ph.months));
+      });
+      toast("تم تطبيق نفس توزيع الأشهر على باقي السنوات");
+      render();
+    });
+  });
 
   const saveFormBtn = document.getElementById("btnSaveClientForm");
   if(saveFormBtn) saveFormBtn.addEventListener("click", saveClientForm);
@@ -4616,18 +4861,29 @@ function recalcClientForm(){
     setText("yearVal_"+idx, fmt(val));
     setText("yearVal2_"+idx, fmt(val));
 
-    const p1raw = document.querySelector(`.phase1Input[data-idx="${idx}"]`)?.value;
-    const p2raw = document.querySelector(`.phase2Input[data-idx="${idx}"]`)?.value;
-    const p3raw = document.querySelector(`.phase3Input[data-idx="${idx}"]`)?.value;
-    const r = resolveYearPhases(val, p1raw, p2raw, p3raw);
-    setText("lastInst_"+idx, fmt(r.lastInst)+" ر.ع");
-    [1,2,3].forEach(n=>{
-      const hintEl = document.getElementById(`phase${n}Hint_${idx}`);
-      if(!hintEl) return;
-      hintEl.innerHTML = (r.isAuto[n-1] && val>0)
-        ? `<span style="color:var(--brass-dark);">تلقائي = ${fmt(r["phase"+n])} ر.ع</span>` : "";
+    const phaseInputs = Array.from(document.querySelectorAll(`.phaseInput[data-idx="${idx}"]`));
+    const phs = phaseInputs.map(pin=>{
+      const mi = document.querySelector(`.phaseMonthsInput[data-idx="${idx}"][data-pi="${pin.dataset.pi}"]`);
+      return { months: mi ? mi.value : 0, value: pin.value };
     });
-    const flexTotal = r.phase1*3 + r.phase2*3 + r.phase3*5;
+    const r = resolvePhases(val, phs);
+    setText("lastInst_"+idx, fmt(r.lastInst)+" ر.ع");
+    phaseInputs.forEach((pin,k)=>{
+      const hintEl = document.getElementById(`phaseHint_${idx}_${pin.dataset.pi}`);
+      if(!hintEl) return;
+      hintEl.innerHTML = (r.isAuto[k] && val>0)
+        ? `<span style="color:var(--brass-dark);">تلقائي = ${fmt(r.amounts[k])} ر.ع</span>` : "";
+    });
+    const monthsChk = document.getElementById("phaseMonthsChk_"+idx);
+    if(monthsChk){
+      const left = TOTAL_FLEX_MONTHS - r.monthsSum;
+      monthsChk.innerHTML = left===0
+        ? `<span style="color:var(--ok);">✓ مجموع أشهر المراحل = 11 (+ الشهر 12 القسط الأخير)</span>`
+        : (left>0
+            ? `<span style="color:var(--warn);">متبقي ${left} شهر بدون مرحلة — المطلوب أن يكون مجموع الأشهر 11</span>`
+            : `<span style="color:var(--warn);">مجموع الأشهر يزيد ${-left} عن 11 — قلّل أشهر المراحل</span>`);
+    }
+    const flexTotal = r.flexTotal;
     const lastInst = r.lastInst;
     const chkEl = document.getElementById("phaseChk_"+idx);
     if(chkEl){
@@ -4636,7 +4892,7 @@ function recalcClientForm(){
       } else if(lastInst<0){
         chkEl.innerHTML = `<span style="color:var(--warn);">تنبيه: إجمالي المراحل المرنة (${fmt(flexTotal)}) يتجاوز إجمالي السنة (${fmt(val)})</span>`;
       } else {
-        chkEl.innerHTML = `<span style="color:var(--ok);">✓ إجمالي الأقساط الاثني عشر = ${fmt(flexTotal+lastInst)} ر.ع (مطابق لإجمالي السنة)</span>`;
+        chkEl.innerHTML = `<span style="color:var(--ok);">✓ إجمالي أقساط السنة = ${fmt(flexTotal+lastInst)} ر.ع (مطابق لإجمالي السنة)</span>`;
       }
     }
   });
@@ -4676,17 +4932,15 @@ function syncFormFromInputs(){
     const idx = parseInt(inp.dataset.idx,10);
     if(clientForm.yearPlans[idx]) clientForm.yearPlans[idx].percent = inp.value;
   });
-  document.querySelectorAll(".phase1Input").forEach(inp=>{
-    const idx = parseInt(inp.dataset.idx,10);
-    if(clientForm.yearPlans[idx]) clientForm.yearPlans[idx].phase1 = inp.value;
+  document.querySelectorAll(".phaseInput").forEach(inp=>{
+    const idx = parseInt(inp.dataset.idx,10), pi = parseInt(inp.dataset.pi,10);
+    const yp = clientForm.yearPlans[idx];
+    if(yp && yp.phases && yp.phases[pi]) yp.phases[pi].value = inp.value;
   });
-  document.querySelectorAll(".phase2Input").forEach(inp=>{
-    const idx = parseInt(inp.dataset.idx,10);
-    if(clientForm.yearPlans[idx]) clientForm.yearPlans[idx].phase2 = inp.value;
-  });
-  document.querySelectorAll(".phase3Input").forEach(inp=>{
-    const idx = parseInt(inp.dataset.idx,10);
-    if(clientForm.yearPlans[idx]) clientForm.yearPlans[idx].phase3 = inp.value;
+  document.querySelectorAll(".phaseMonthsInput").forEach(inp=>{
+    const idx = parseInt(inp.dataset.idx,10), pi = parseInt(inp.dataset.pi,10);
+    const yp = clientForm.yearPlans[idx];
+    if(yp && yp.phases && yp.phases[pi]) yp.phases[pi].months = inp.value;
   });
   if(clientForm.consultantSchedule){
     document.querySelectorAll(".csLabelInput").forEach(inp=>{
@@ -4762,13 +5016,26 @@ function saveClientForm(){
       f.yearPlans = f.yearPlans.slice(0,years);
     }
 
+    for(let k=0;k<f.yearPlans.length;k++){
+      const phs = f.yearPlans[k].phases || [];
+      if(!phs.length || phs.some(ph=>phaseMonthsNum(ph)<1)){
+        toast(`السنة ${arabicYear(k+1)}: كل مرحلة يجب أن تكون شهرًا واحدًا على الأقل`);
+        return;
+      }
+      const sum = phasesMonthsSum(phs);
+      if(sum!==TOTAL_FLEX_MONTHS){
+        toast(`السنة ${arabicYear(k+1)}: مجموع أشهر المراحل ${sum} — يجب أن يساوي 11 شهرًا (الشهر 12 هو القسط الأخير التلقائي)`);
+        return;
+      }
+    }
+
     const yearPlans = f.yearPlans.map(yp=>{
       const percent = (parseFloat(yp.percent)||0)/100;
       const amount = remaining*percent;
-      const r = resolveYearPhases(amount, yp.phase1, yp.phase2, yp.phase3);
+      const r = resolvePhases(amount, yp.phases);
       return {
-        percent, amount, phase1:r.phase1, phase2:r.phase2, phase3:r.phase3, lastInstallment:r.lastInst,
-        phase1Raw: yp.phase1 || "", phase2Raw: yp.phase2 || "", phase3Raw: yp.phase3 || ""
+        percent, amount, lastInstallment:r.lastInst,
+        phases: yp.phases.map((ph,k)=>({ id: ph.id||uid("ph"), months: phaseMonthsNum(ph), amount: r.amounts[k], raw: ph.value || "" }))
       };
     });
 
@@ -4807,11 +5074,7 @@ function bindChequesReportEvents(){
   if(xl) xl.addEventListener("click", ()=>exportTableExcel("chqReportTable","تقرير_الشيكات"));
   const wd = document.getElementById("btnExportChqWord");
   if(wd) wd.addEventListener("click", ()=>exportTableWord("chqReportTable","تقرير الشيكات"));
-  const isAdmin = !!(currentUser && currentUser.role==="admin");
-  document.querySelectorAll(".perm-admin-only").forEach(el=>{
-    if(!isAdmin) el.style.display = "none";
-  });
-  if(isAdmin){
+  if(can("reportCheques.printReceipt")){
     document.querySelectorAll("[data-print-any-receipt]").forEach(btn=>{
       btn.addEventListener("click", ()=>printAnyReceiptFor(btn.dataset.printAnyReceipt));
     });
@@ -4918,6 +5181,82 @@ function renderReceiptsScreen(){
 }
 
 /* ============================= SCREEN: USERS (admin only — تفعيل/إيقاف الأكواد) ============================= */
+let permEditCode = null; // الكود الذي يجري تعديل صلاحياته الآن
+
+function screenLabelsOf(u){
+  return effScreens(u).map(sn=>SCREEN_LABELS[sn]||sn).join("، ") || "—";
+}
+
+function renderPermEditor(){
+  const u = USERS.find(x=>normCode(x.code)===normCode(permEditCode));
+  if(!u || u.role==="admin") return "";
+  const screens = effScreens(u), tools = effTools(u);
+  const blocks = PERM_CATALOG.map(sc=>{
+    const on = screens.includes(sc.screen);
+    return `
+    <div class="perm-screen ${on?"":"off"}" data-screen-block="${sc.screen}">
+      <div class="perm-screen-head">
+        <label class="perm-check strong"><input type="checkbox" class="permScreenCb" data-screen="${sc.screen}" ${on?"checked":""}> <span>${esc(sc.label)}</span></label>
+        <div class="grow"></div>
+        <button type="button" class="btn btn-ghost btn-sm" data-perm-all="${sc.screen}">تحديد الكل</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-perm-none="${sc.screen}">إلغاء الكل</button>
+      </div>
+      <div class="perm-tools">
+        ${sc.tools.map(t=>`
+        <label class="perm-check"><input type="checkbox" class="permToolCb" data-screen="${sc.screen}" data-tool="${t.k}" ${tools.includes(t.k)?"checked":""} ${on?"":"disabled"}> <span>${esc(t.l)}</span></label>`).join("")}
+      </div>
+    </div>`;
+  }).join("");
+  const custom = !!userPermRecord(u);
+  return `
+  <div class="card perm-editor" id="permEditorCard">
+    <div class="toolbar" style="margin-bottom:2px;">
+      <h2 style="margin:0;">صلاحيات المستخدم: ${esc(u.code)} <span class="muted" style="font-weight:400;font-size:13px;">— ${esc(u.label)}</span></h2>
+      <div class="grow"></div>
+      ${custom ? `<span class="badge badge-due">صلاحيات مخصّصة</span>` : `<span class="badge">الصلاحيات الافتراضية</span>`}
+    </div>
+    <p class="hint">فعّل الشاشة ثم حدّد الأدوات المسموحة داخلها (التقارير والتصدير والطباعة والتعديل والحذف… إلخ). الأدوات غير المحددة تختفي تمامًا من شاشة المستخدم. يُطبَّق الحفظ فورًا على جميع الأجهزة. شاشتا «إدارة المستخدمين» و«إعدادات الشركة» للأدمن فقط.</p>
+    <div class="toolbar no-print" style="margin-bottom:12px;">
+      <button type="button" class="btn btn-ghost btn-sm" id="btnPermAllGlobal">تحديد كل الصلاحيات</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnPermNoneGlobal">إلغاء كل الصلاحيات</button>
+    </div>
+    ${blocks}
+    <div class="toolbar no-print" style="margin-top:6px;">
+      <button type="button" class="btn btn-brass" id="btnPermSave">حفظ الصلاحيات</button>
+      <button type="button" class="btn btn-ghost" id="btnPermReset" ${custom?"":"disabled"}>استرجاع الافتراضي</button>
+      <button type="button" class="btn btn-ghost" id="btnPermClose">إغلاق</button>
+    </div>
+  </div>`;
+}
+
+function renderPermReport(){
+  const cols = USERS;
+  const head = `<tr><th>الشاشة / الأداة</th>${cols.map(u=>`<th>${esc(u.code)}<br><span class="muted" style="font-weight:400;">${esc(u.label)}</span></th>`).join("")}</tr>`;
+  const yes = `<td class="perm-yes">✓</td>`, no = `<td class="perm-no">—</td>`;
+  let body = "";
+  PERM_CATALOG.forEach(sc=>{
+    body += `<tr class="perm-screen-row"><td>${esc(sc.label)} — دخول الشاشة</td>${cols.map(u=>effScreens(u).includes(sc.screen)?yes:no).join("")}</tr>`;
+    sc.tools.forEach(t=>{
+      body += `<tr><td style="padding-inline-start:22px;">${esc(t.l)}</td>${cols.map(u=>(effScreens(u).includes(sc.screen) && effTools(u).includes(t.k))?yes:no).join("")}</tr>`;
+    });
+  });
+  ADMIN_ONLY_SCREENS.forEach(sn=>{
+    body += `<tr class="perm-screen-row"><td>${esc(SCREEN_LABELS[sn])} — دخول الشاشة</td>${cols.map(u=>u.role==="admin"?yes:no).join("")}</tr>`;
+  });
+  return `
+  <div class="card">
+    <div class="toolbar" style="margin-bottom:2px;">
+      <h2 style="margin:0;">تقرير الصلاحيات</h2>
+      <div class="grow"></div>
+      <button class="btn btn-ghost btn-sm no-print" id="btnExportPermReportExcel">تصدير Excel</button>
+      <button class="btn btn-ghost btn-sm no-print" id="btnExportPermReportWord">تصدير Word</button>
+      <button class="btn btn-navy btn-sm no-print" id="btnPrintPermReport">طباعة</button>
+    </div>
+    <p class="hint">ملخص ما يستطيع كل مستخدم فعله في كل شاشة (✓ مسموح — غير مسموح).</p>
+    <div class="table-wrap"><table id="permReportTable"><thead>${head}</thead><tbody>${body}</tbody></table></div>
+  </div>`;
+}
+
 function renderUsersScreen(){
   if(!currentUser || currentUser.role!=="admin"){
     return `<div class="card"><h2>غير مسموح</h2><p class="hint">هذه الشاشة مخصصة للأدمن فقط.</p></div>`;
@@ -4925,13 +5264,18 @@ function renderUsersScreen(){
   let rows = USERS.map(u=>{
     const active = isUserActive(u.code);
     const isSelf = normCode(u.code)===normCode(currentUser.code);
+    const isAdm = u.role==="admin";
+    const nTools = effTools(u).length;
+    const custom = !isAdm && !!userPermRecord(u);
     return `
       <tr>
         <td>${esc(u.code)}</td>
         <td>${esc(u.label)}</td>
-        <td>${esc((u.perms||[]).join("، "))}</td>
+        <td>${esc(screenLabelsOf(u))}</td>
+        <td class="num">${nTools} / ${ALL_TOOL_KEYS.length} ${custom ? '<span class="badge badge-due">مخصّصة</span>' : ""}</td>
         <td>${active ? '<span class="badge badge-ok">مفعّل</span>' : '<span class="badge badge-warn">موقوف</span>'}</td>
-        <td class="no-print">
+        <td class="no-print" style="white-space:nowrap;">
+          ${isAdm ? `<span class="muted">كاملة (ثابتة)</span>` : `<button class="btn btn-navy btn-sm" data-edit-perms="${esc(u.code)}">تعديل الصلاحيات</button>`}
           <button class="btn ${active?'btn-ghost':'btn-brass'} btn-sm" data-toggle-user="${esc(u.code)}" ${isSelf?"disabled title=\"لا يمكنك إيقاف حسابك الحالي\"":""}>
             ${active ? "إيقاف الكود" : "تشغيل الكود"}
           </button>
@@ -4947,14 +5291,16 @@ function renderUsersScreen(){
       <button class="btn btn-ghost btn-sm no-print" id="btnExportUsersExcel">تصدير Excel</button>
       <button class="btn btn-ghost btn-sm no-print" id="btnExportUsersWord">تصدير Word</button>
     </div>
-    <p class="hint">يمكنك تفعيل أو إيقاف صلاحية الدخول لأي كود مستخدم. الكود الموقوف لا يستطيع تسجيل الدخول للنظام حتى تتم إعادة تفعيله، وإن كان مسجّلاً دخوله حاليًا سيتم إخراجه تلقائيًا عند إعادة تحميل الصفحة.</p>
+    <p class="hint">يمكنك تفعيل أو إيقاف صلاحية الدخول لأي كود مستخدم، وتحديد الشاشات والأدوات المسموحة لكل مستخدم بالضغط على «تعديل الصلاحيات». الكود الموقوف لا يستطيع تسجيل الدخول حتى تتم إعادة تفعيله.</p>
     <div class="table-wrap">
       <table id="usersTable">
-        <thead><tr><th>الكود (اسم الدخول)</th><th>المسمى</th><th>الصلاحيات</th><th>الحالة</th><th class="no-print">إجراء</th></tr></thead>
+        <thead><tr><th>الكود (اسم الدخول)</th><th>المسمى</th><th>الشاشات المسموحة</th><th>الأدوات المسموحة</th><th>الحالة</th><th class="no-print">إجراء</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
-  </div>`;
+  </div>
+  ${permEditCode ? renderPermEditor() : ""}
+  ${renderPermReport()}`;
 }
 
 function bindUsersEvents(){
@@ -4969,6 +5315,85 @@ function bindUsersEvents(){
   if(xl) xl.addEventListener("click", ()=>exportTableExcel("usersTable","إدارة_المستخدمين"));
   const wd = document.getElementById("btnExportUsersWord");
   if(wd) wd.addEventListener("click", ()=>exportTableWord("usersTable","إدارة المستخدمين"));
+  const rx = document.getElementById("btnExportPermReportExcel");
+  if(rx) rx.addEventListener("click", ()=>exportTableExcel("permReportTable","تقرير_الصلاحيات"));
+  const rw = document.getElementById("btnExportPermReportWord");
+  if(rw) rw.addEventListener("click", ()=>exportTableWord("permReportTable","تقرير الصلاحيات"));
+  const rp = document.getElementById("btnPrintPermReport");
+  if(rp) rp.addEventListener("click", ()=>printTable("permReportTable","تقرير الصلاحيات"));
+
+  document.querySelectorAll("[data-edit-perms]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      permEditCode = btn.dataset.editPerms;
+      render();
+      const card = document.getElementById("permEditorCard");
+      if(card) card.scrollIntoView({behavior:"smooth", block:"start"});
+    });
+  });
+
+  const editor = document.getElementById("permEditorCard");
+  if(!editor) return;
+  const toolCbs = sn => Array.from(editor.querySelectorAll(`.permToolCb[data-screen="${sn}"]`));
+  const syncBlock = sn=>{
+    const scr = editor.querySelector(`.permScreenCb[data-screen="${sn}"]`);
+    const block = editor.querySelector(`[data-screen-block="${sn}"]`);
+    toolCbs(sn).forEach(cb=>{ cb.disabled = !scr.checked; });
+    if(block) block.classList.toggle("off", !scr.checked);
+  };
+  editor.querySelectorAll(".permScreenCb").forEach(cb=>{
+    cb.addEventListener("change", ()=>{
+      const sn = cb.dataset.screen;
+      if(cb.checked && !toolCbs(sn).some(t=>t.checked)) toolCbs(sn).forEach(t=>{ t.checked = true; });
+      syncBlock(sn);
+    });
+  });
+  editor.querySelectorAll("[data-perm-all]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const sn = btn.dataset.permAll;
+      editor.querySelector(`.permScreenCb[data-screen="${sn}"]`).checked = true;
+      toolCbs(sn).forEach(t=>{ t.checked = true; });
+      syncBlock(sn);
+    });
+  });
+  editor.querySelectorAll("[data-perm-none]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const sn = btn.dataset.permNone;
+      toolCbs(sn).forEach(t=>{ t.checked = false; });
+    });
+  });
+  const setAll = val=>{
+    PERM_CATALOG.forEach(sc=>{
+      editor.querySelector(`.permScreenCb[data-screen="${sc.screen}"]`).checked = val;
+      toolCbs(sc.screen).forEach(t=>{ t.checked = val; });
+      syncBlock(sc.screen);
+    });
+  };
+  document.getElementById("btnPermAllGlobal").addEventListener("click", ()=>setAll(true));
+  document.getElementById("btnPermNoneGlobal").addEventListener("click", ()=>setAll(false));
+
+  document.getElementById("btnPermSave").addEventListener("click", ()=>{
+    const u = USERS.find(x=>normCode(x.code)===normCode(permEditCode));
+    if(!u || u.role==="admin") return;
+    const screens = [], tools = [];
+    PERM_CATALOG.forEach(sc=>{
+      const on = editor.querySelector(`.permScreenCb[data-screen="${sc.screen}"]`).checked;
+      if(!on) return;
+      screens.push(sc.screen);
+      toolCbs(sc.screen).forEach(t=>{ if(t.checked) tools.push(t.dataset.tool); });
+    });
+    state.userPerms[normCode(u.code)] = { screens, tools };
+    saveState();
+    toast("تم حفظ صلاحيات المستخدم");
+    permEditCode = null;
+    render();
+  });
+  document.getElementById("btnPermReset").addEventListener("click", ()=>{
+    delete state.userPerms[normCode(permEditCode)];
+    saveState();
+    toast("تم استرجاع الصلاحيات الافتراضية");
+    render();
+  });
+  document.getElementById("btnPermClose").addEventListener("click", ()=>{ permEditCode = null; render(); });
 }
 
 /* ============================= SCREEN: SETTINGS (company details) ============================= */
@@ -5315,7 +5740,7 @@ function openReceipt(cheque, client, instItems, isReprint){
 function showReceiptModal(isReprint){
   const root = document.getElementById("modalRoot");
   if(isLimitedChequesRole()){ root.innerHTML=""; return; }
-  const canPrint = !isLimitedChequesRole();
+  const canPrint = can("cheques.printAfterSave") || can("cheques.printReceipt") || can("receipts.reprint") || can("reportCheques.printReceipt");
   root.innerHTML = `
   <div class="modal-bg no-print" id="receiptBg">
     <div class="modal" style="max-width:640px;max-height:88vh;overflow-y:auto;">
