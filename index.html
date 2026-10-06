@@ -2681,6 +2681,14 @@ function buildPlan(client){
     // to the before-tax amount (taxAmount is always 0 there).
     inst.dueAmount = taxEnabled ? inst.totalWithTax : inst.amount;
   });
+  // رقم العرض (م): الحجز/المقدم/الضريبة بلا رقم (—)، ويبدأ الترقيم من 1 عند أول قسط
+  // (السنة الأولى في الوضع الاعتيادي، أو أول دفعة في وضع الاستشاري) حتى آخر قسط.
+  let dispCounter = 0;
+  installments.forEach(inst=>{
+    const isInstallment = inst.type==="قسط شهري" || inst.type==="قسط استشاري" || inst.type==="بند إضافي";
+    if(isInstallment && inst.amount>0.001){ inst.dispNo = ++dispCounter; }
+    else { inst.dispNo = null; }
+  });
   return installments;
 }
 function arabicYear(y){ return ["الأولى","الثانية","الثالثة","الرابعة","الخامسة","السادسة"][y-1] || y; }
@@ -2998,7 +3006,7 @@ function renderChequesScreen(){
               <td class="num">${chqCell}</td>
             </tr>` : `<tr>
               ${chqNoSelect ? "" : `<td class="no-print"><input type="checkbox" class="instCheck" data-inst="${inst.id}" ${checked} ${disabled}></td>`}
-              <td class="num muted">${inst.seq}</td>
+              <td class="num muted">${inst.dispNo!=null ? inst.dispNo : "—"}</td>
               <td>${esc(inst.label)} ${inst.edited?`<span class="muted" title="تم تعديلها يدويًا">✎</span>`:""}</td>
               <td class="muted">${esc(inst.type)}</td>
               <td class="num">${fmtDate(inst.dueDate)}</td>
@@ -3268,7 +3276,7 @@ function renderCollectScreen(){
         const plan = planCache[r.cl.id];
         const matchesInstSeq = (r.chq.allocations||[]).some(a=>{
           const inst = plan.find(i=>i.id===a.installmentId);
-          return inst && String(inst.seq).toLowerCase().includes(q);
+          return inst && inst.dispNo!=null && String(inst.dispNo).toLowerCase().includes(q);
         });
         if(matchesInstSeq) return true;
       }
@@ -6152,7 +6160,7 @@ function openCollectionReceipt(record, chq, client){
   const plan = buildPlan(client);
   const linkedInsts = (chq.allocations||[]).map(a=>plan.find(i=>i.id===a.installmentId)).filter(Boolean).sort((a,b)=>a.seq-b.seq);
   const instLabels = linkedInsts.map(inst=>inst.label).join("، ") || "—";
-  const instSeqs = linkedInsts.map(inst=>inst.seq).join("، ") || "—";
+  const instSeqs = linkedInsts.map(inst=>inst.dispNo!=null ? inst.dispNo : "—").join("، ") || "—";
   const paymentRefLabel = linkedInsts.length>1 ? "الدفعات التعاقدية أرقام" : "الدفعة التعاقدية رقم";
   const instDueDates = linkedInsts.map(inst=>fmtDate(inst.dueDate)).join("، ") || "—";
   const instAmounts = linkedInsts.map(inst=>fmt(inst.amount)).join("، ") || "—";
