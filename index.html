@@ -1927,6 +1927,7 @@ const PERM_CATALOG = [
     {k:"clients.delete",    l:"حذف عميل", d:_full("clientsMode")},
     {k:"clients.manualAmounts", l:"كتابة المبالغ يدويًا (الحجز، المقدم، إجمالي كل سنة، الضريبة والإجمالي)", d:u=>["full","addonly"].includes(_cm(u,"clientsMode"))},
     {k:"clients.flexMonths", l:"تعديل عدد الأشهر المرنة في كل سنة (الافتراضي 11) وتوزيع المراحل عليها", d:_full("clientsMode")},
+    {k:"clients.monthsRule", l:"تجاوز شرط مجموع أشهر المراحل (لا يلزم أن يساوي عدد الأشهر المرنة — الأشهر المتبقية تُحسب تلقائيًا كأقساط أخيرة)", d:()=>false},
     {k:"clients.editItems", l:"إضافة / حذف / ترتيب بنود الاستشاري والبنود الإضافية", d:_full("clientsMode")},
     {k:"clients.export",    l:"تصدير قائمة العملاء Excel / Word", d:_full("clientsMode")}
   ]},
@@ -3624,6 +3625,17 @@ function fitPhasesToMonths(phases, N){
   }
   if(!phases.length) phases.push(newPhase(N));
 }
+/* عدد الأشهر المرنة الفعلي لسنة معيّنة: الافتراضي = عدد الأشهر المرنة للعميل. وبصلاحية clients.monthsRule
+   لا يلزم أن يساوي مجموع أشهر المراحل ذلك العدد — يصبح مجموع أشهر المراحل (1..12) هو العدد الفعلي،
+   وتُحسب بقية أشهر السنة تلقائيًا كأقساط أخيرة. */
+function effFlexForYear(phases, flexN){
+  const base = normFlexMonths(flexN);
+  if(typeof can==="function" && can("clients.monthsRule")){
+    const s = phasesMonthsSum(phases);
+    if(s>=1 && s<=12) return s;
+  }
+  return base;
+}
 function phaseMonthsNum(ph){ return Math.max(0, parseInt(ph && ph.months, 10) || 0); }
 function phasesMonthsSum(phases){ return (phases||[]).reduce((t,ph)=>t+phaseMonthsNum(ph),0); }
 function resolvePhases(yearVal, phases, flexN){
@@ -3666,7 +3678,7 @@ function storedPhasesToForm(yp){
 }
 /* قيمة قسط الشهر m (1..12) من خطة سنة مخزّنة — تدعم الشكل الجديد والقديم */
 function monthAmountForYearPlan(yp, m, flexN){
-  if(m>normFlexMonths(flexN)) return yp.lastInstallment||0;
+  if(m>normFlexMonths(yp.flexMonths!=null ? yp.flexMonths : flexN)) return yp.lastInstallment||0;
   if(Array.isArray(yp.phases) && yp.phases.length){
     let acc = 0;
     for(const ph of yp.phases){
@@ -5003,7 +5015,8 @@ function recalcClientForm(){
       return { months: mi ? mi.value : 0, value: pin.value };
     });
     const flexN = normFlexMonths(clientForm && clientForm.flexMonths);
-    const r = resolvePhases(val, phs, flexN);
+    const effN = effFlexForYear(phs, flexN);
+    const r = resolvePhases(val, phs, effN);
     setText("lastInst_"+idx, fmt(r.lastInst)+" ر.ع");
     phaseInputs.forEach((pin,k)=>{
       const hintEl = document.getElementById(`phaseHint_${idx}_${pin.dataset.pi}`);
@@ -5014,11 +5027,17 @@ function recalcClientForm(){
     const monthsChk = document.getElementById("phaseMonthsChk_"+idx);
     if(monthsChk){
       const left = flexN - r.monthsSum;
-      monthsChk.innerHTML = left===0
-        ? `<span style="color:var(--ok);">✓ مجموع أشهر المراحل = ${flexN}${r.tailMonths>0 ? ` (+ ${r.tailMonths===1 ? "الشهر 12 القسط الأخير" : `الأشهر ${flexN+1}–12 أقساط أخيرة`})` : ""}</span>`
-        : (left>0
-            ? `<span style="color:var(--warn);">متبقي ${left} شهر بدون مرحلة — المطلوب أن يكون مجموع الأشهر ${flexN}</span>`
-            : `<span style="color:var(--warn);">مجموع الأشهر يزيد ${-left} عن ${flexN} — قلّل أشهر المراحل</span>`);
+      if(can("clients.monthsRule") && r.monthsSum>12){
+        monthsChk.innerHTML = `<span style="color:var(--warn);">مجموع الأشهر ${r.monthsSum} — لا يمكن أن يزيد عن 12 شهرًا في السنة</span>`;
+      } else if(effN!==flexN){
+        monthsChk.innerHTML = `<span style="color:var(--ok);">✓ مجموع أشهر المراحل = ${effN} (بصلاحية خاصة — غير مقيّد بـ ${flexN})${r.tailMonths>0 ? ` — ${r.tailMonths===1 ? "الشهر 12 قسط أخير تلقائي" : `الأشهر ${effN+1}–12 أقساط أخيرة تلقائية`}` : ""}</span>`;
+      } else {
+        monthsChk.innerHTML = left===0
+          ? `<span style="color:var(--ok);">✓ مجموع أشهر المراحل = ${flexN}${r.tailMonths>0 ? ` (+ ${r.tailMonths===1 ? "الشهر 12 القسط الأخير" : `الأشهر ${flexN+1}–12 أقساط أخيرة`})` : ""}</span>`
+          : (left>0
+              ? `<span style="color:var(--warn);">متبقي ${left} شهر بدون مرحلة — المطلوب أن يكون مجموع الأشهر ${flexN}</span>`
+              : `<span style="color:var(--warn);">مجموع الأشهر يزيد ${-left} عن ${flexN} — قلّل أشهر المراحل</span>`);
+      }
     }
     const flexTotal = r.flexTotal;
     const lastInst = r.lastInst;
@@ -5170,6 +5189,7 @@ function saveClientForm(){
     }
 
     const flexN = normFlexMonths(f.flexMonths);
+    const yearEff = [];
     for(let k=0;k<f.yearPlans.length;k++){
       const phs = f.yearPlans[k].phases || [];
       if(!phs.length || phs.some(ph=>phaseMonthsNum(ph)<1)){
@@ -5177,19 +5197,29 @@ function saveClientForm(){
         return;
       }
       const sum = phasesMonthsSum(phs);
+      let effN = flexN;
       if(sum!==flexN){
-        toast(`السنة ${arabicYear(k+1)}: مجموع أشهر المراحل ${sum} — يجب أن يساوي ${flexN} شهرًا${flexN<12 ? " (باقي أشهر السنة قسط أخير تلقائي)" : ""}`);
-        return;
+        if(can("clients.monthsRule")){
+          if(sum>12){
+            toast(`السنة ${arabicYear(k+1)}: مجموع أشهر المراحل ${sum} — لا يمكن أن يزيد عن 12 شهرًا`);
+            return;
+          }
+          effN = sum;   // الأشهر المتبقية (12 - المجموع) تُحسب تلقائيًا كأقساط أخيرة
+        } else {
+          toast(`السنة ${arabicYear(k+1)}: مجموع أشهر المراحل ${sum} — يجب أن يساوي ${flexN} شهرًا${flexN<12 ? " (باقي أشهر السنة قسط أخير تلقائي)" : ""}`);
+          return;
+        }
       }
+      yearEff[k] = effN;
     }
 
-    const yearPlans = f.yearPlans.map(yp=>{
+    const yearPlans = f.yearPlans.map((yp,k0)=>{
       const yManual = String(yp.amtManual??"").trim()!=="";
       const amount = yManual ? (parseFloat(yp.amtManual)||0) : remaining*(parseFloat(yp.percent)||0)/100;
       const percent = yManual ? (remaining>0 ? amount/remaining : 0) : (parseFloat(yp.percent)||0)/100;
-      const r = resolvePhases(amount, yp.phases, flexN);
+      const r = resolvePhases(amount, yp.phases, yearEff[k0]);
       return {
-        percent, amount, amtManual: yManual ? amount : null, lastInstallment:r.lastInst,
+        percent, amount, amtManual: yManual ? amount : null, lastInstallment:r.lastInst, flexMonths: yearEff[k0],
         phases: yp.phases.map((ph,k)=>({ id: ph.id||uid("ph"), months: phaseMonthsNum(ph), amount: r.amounts[k], raw: ph.value || "" }))
       };
     });
@@ -5200,7 +5230,7 @@ function saveClientForm(){
       return;
     }
 
-    const mismatchIdx = yearPlans.findIndex((yp,k)=> yp.amount>0 && 12-flexN===0 && Math.abs(resolvePhases(yp.amount, f.yearPlans[k].phases, flexN).leftover)>0.5);
+    const mismatchIdx = yearPlans.findIndex((yp,k)=> yp.amount>0 && 12-yearEff[k]===0 && Math.abs(resolvePhases(yp.amount, f.yearPlans[k].phases, yearEff[k]).leftover)>0.5);
     if(mismatchIdx>=0){
       toast(`السنة ${arabicYear(mismatchIdx+1)}: إجمالي المراحل لا يساوي إجمالي السنة — اترك مرحلة واحدة على الأقل صفرًا للحساب التلقائي`);
       return;
