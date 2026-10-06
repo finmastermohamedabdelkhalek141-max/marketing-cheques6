@@ -1741,6 +1741,8 @@ function normalizeState(){
   if(!state.userStatus || typeof state.userStatus !== "object") state.userStatus = {};
   if(typeof state.companyTaxNumber !== "string") state.companyTaxNumber = "";
   if(!state.userPerms || typeof state.userPerms !== "object") state.userPerms = {};
+  if(!state.userAccounts || typeof state.userAccounts !== "object") state.userAccounts = {};
+  try{ applyUserAccounts(); }catch(e){ /* USERS لم تُعرَّف بعد عند أول تحميل — تُطبَّق بعد تعريفها */ }
 }
 function saveState(){
   localStorage.setItem(LS_KEY, JSON.stringify(state));
@@ -1861,6 +1863,24 @@ const USERS = [
 
 let currentUser = null;
 
+/* ===== تعديل أكواد المستخدمين وأرقامهم السرية (من شاشة إدارة المستخدمين، للأدمن فقط) =====
+   - الكود والمسمى يُحفظان في state.userAccounts (يتزامن مع السحابة على كل الأجهزة).
+   - الرقم السري يُغيَّر فعليًا في Firebase Authentication، ولا يُخزَّن في البيانات المتزامنة إطلاقًا؛
+     نحتفظ بآخر رقم سري معروف على جهاز الأدمن فقط (localStorage) ليستخدمه عند التغيير القادم. */
+const PW_KEY = "marketing_cheques_known_pw_v1";
+function applyUserAccounts(){
+  USERS.forEach(u=>{
+    if(!u.id){ u.id = u.code; u._basePw = u.password; u._baseLabel = u.label; }
+    const rec = state.userAccounts && state.userAccounts[u.id];
+    u.code = (rec && rec.code) || u.id;
+    u.label = (rec && rec.label) || u._baseLabel;
+  });
+}
+applyUserAccounts();
+function knownPwMap(){ try{ return JSON.parse(localStorage.getItem(PW_KEY)||"{}"); }catch(e){ return {}; } }
+function getKnownPw(u){ const m = knownPwMap(); return (m[u.id]!=null) ? m[u.id] : u._basePw; }
+function setKnownPw(u, pw){ const m = knownPwMap(); m[u.id] = pw; try{ localStorage.setItem(PW_KEY, JSON.stringify(m)); }catch(e){} }
+
 function normCode(v){ return String(v||"").trim().toLowerCase(); }
 
 function findUser(code, password){
@@ -1885,7 +1905,8 @@ const PERM_CATALOG = [
     {k:"cheques.printReceipt",l:"طباعة إيصال شيك مسجّل", d:_full("chequesMode")},
     {k:"cheques.delCheque",   l:"حذف شيك مسجّل", d:_full("chequesMode")},
     {k:"cheques.editInst",    l:"تعديل دفعة (القيمة / التاريخ / البيان / رقم الشيك)", d:_full("chequesMode")},
-    {k:"cheques.editTax",     l:"تعديل الضريبة والإجمالي داخل الجدول", d:_full("chequesMode")},
+    {k:"cheques.editTax",     l:"كتابة الضريبة والإجمالي شامل الضريبة يدويًا داخل الجدول", d:_full("chequesMode")},
+    {k:"cheques.manualAmount",l:"كتابة قيمة الشيك يدويًا عند التسجيل", d:_full("chequesMode")},
     {k:"cheques.exportPlan",  l:"تصدير خطة السداد Excel / Word", d:u=>_cm(u,"chequesMode")!=="viewonly"},
     {k:"cheques.printPlan",   l:"طباعة جدول السداد", d:_full("chequesMode")}
   ]},
@@ -1904,6 +1925,7 @@ const PERM_CATALOG = [
     {k:"clients.add",       l:"إضافة عميل جديد", d:u=>["full","addonly"].includes(_cm(u,"clientsMode"))},
     {k:"clients.edit",      l:"تعديل بيانات عميل وخطة سداده", d:_full("clientsMode")},
     {k:"clients.delete",    l:"حذف عميل", d:_full("clientsMode")},
+    {k:"clients.manualAmounts", l:"كتابة المبالغ يدويًا (الحجز، المقدم، إجمالي كل سنة، الضريبة والإجمالي)", d:u=>["full","addonly"].includes(_cm(u,"clientsMode"))},
     {k:"clients.editItems", l:"إضافة / حذف / ترتيب بنود الاستشاري والبنود الإضافية", d:_full("clientsMode")},
     {k:"clients.export",    l:"تصدير قائمة العملاء Excel / Word", d:_full("clientsMode")}
   ]},
@@ -2137,21 +2159,27 @@ function purgeOrphanChequeData(){
 let view = "cheques";
 
 /* ============================= HELPERS ============================= */
+/* بدون أي تقريب: تُعرض القيمة كاملة بكل كسورها. الخطوة الوحيدة هي إزالة «ضجيج» الفاصلة العائمة
+   (مثل 0.30000000000000004) عبر 12 خانة معنوية، ولا تُقرَّب أي قيمة مخزّنة أو محسوبة. */
+function cleanNum(n){
+  n = Number(n);
+  if(!isFinite(n)) return 0;
+  return parseFloat(n.toPrecision(12));
+}
 function fmt(n){
-  n = Number(n)||0;
-  return n.toLocaleString("ar-OM",{minimumFractionDigits:0,maximumFractionDigits:3});
+  return cleanNum(n).toLocaleString("ar-OM",{minimumFractionDigits:0,maximumFractionDigits:12});
 }
 function fmtPct(n){
-  n = Number(n)||0;
-  return n.toLocaleString("ar-OM",{minimumFractionDigits:0,maximumFractionDigits:2});
+  return cleanNum(n).toLocaleString("ar-OM",{minimumFractionDigits:0,maximumFractionDigits:12});
 }
+function pctStr(n){ return String(cleanNum(n)); }
 /* Plain (no thousands-separator) numeric string safe to assign to an <input type=number>
    value, rounded to 3 decimals and stripped of any trailing zeros/dot. Empty for 0/NaN
    is avoided on purpose — 0 is a valid computed value and should still display as "0". */
 function roundNum(n){
   n = Number(n);
   if(!isFinite(n)) n = 0;
-  return String(Math.round(n*1000)/1000);
+  return String(parseFloat(n.toPrecision(15)));
 }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 /* Compute the date `months` after startDate, keeping startDate's day-of-month
@@ -2975,10 +3003,10 @@ function renderChequesScreen(){
               <td class="num">${fmt(inst.amount)}</td>
               <td class="num" data-print-value="${fmt(inst.taxAmount)}">${chqNoEditTax
                 ? `${fmt(inst.taxAmount)} ${inst.taxEdited?`<span class="muted" title="تم تعديلها يدويًا">✎</span>`:""}`
-                : `<input type="number" step="0.001" class="instTaxInput" data-inst="${inst.id}" value="${inst.taxAmount}" style="width:90px;text-align:center;">`}</td>
+                : `<input type="number" step="any" class="instTaxInput" data-inst="${inst.id}" value="${inst.taxAmount}" style="width:90px;text-align:center;">`}</td>
               <td class="num" data-print-value="${fmt(inst.totalWithTax)}">${chqNoEditTax
                 ? `${fmt(inst.totalWithTax)} ${inst.totalEdited?`<span class="muted" title="تم تعديلها يدويًا">✎</span>`:""}`
-                : `<input type="number" step="0.001" class="instTotalInput" data-inst="${inst.id}" value="${inst.totalWithTax}" style="width:100px;text-align:center;">`}</td>
+                : `<input type="number" step="any" class="instTotalInput" data-inst="${inst.id}" value="${inst.totalWithTax}" style="width:100px;text-align:center;">`}</td>
               <td class="num">${fmt(inst.paidAmount)} ${inst.paidAmount>0 && remaining>0 ? `<span class="muted">(متبقي ${fmt(remaining)})</span>`:""}</td>
               <td class="num">${chqCell}</td>
               <td>${statusBadge(st)}</td>
@@ -3022,8 +3050,9 @@ function renderChequesScreen(){
     </div>
     <div class="field" style="${chqNoActions ? "display:none;" : ""}">
       <label>قيمة الشيك</label>
-      <input id="chkAmount" type="number" step="0.001" placeholder="0.00" readonly style="background:#f1ede2;">
+      <input id="chkAmount" type="number" step="any" placeholder="0.00" ${can("cheques.manualAmount") ? "" : `readonly style="background:#f1ede2;"`}>
       <div class="import-hint" id="selSummary">حدد دفعة واحدة أو أكثر من الجدول أعلاه لحساب قيمة الشيك تلقائيًا.</div>
+      ${can("cheques.manualAmount") ? `<div class="import-hint">يمكنك كتابة قيمة الشيك يدويًا بدون أي تقريب — توزَّع على الدفعات المحددة بالترتيب.</div>` : ""}
     </div>
     <button class="btn btn-brass" id="btnSaveCheque">حفظ الشيك واستخراج الإيصال</button>
   </div>`}`;
@@ -3128,7 +3157,7 @@ function renderQuickCollectCard(){
     <div class="row">
       <div class="field">
         <label>المبلغ المحصَّل فعليًا</label>
-        <input id="qcAmount" type="number" step="0.001" min="0" value="${selIsPartial ? selRemaining : selChq.amount}">
+        <input id="qcAmount" type="number" step="any" min="0" value="${selIsPartial ? selRemaining : selChq.amount}">
       </div>
       <div class="field">
         <label>تاريخ التحصيل</label>
@@ -3440,7 +3469,7 @@ function openCollectModal(chqId){
       </div>
       <div class="field">
         <label>المبلغ المحصَّل فعليًا من البنك</label>
-        <input id="collectAmountInput" type="number" step="0.001" value="${chq.amount}">
+        <input id="collectAmountInput" type="number" step="any" value="${chq.amount}">
         <div class="import-hint">القيمة الاسمية للشيك: ${fmt(chq.amount)} ر.ع. عدّل هذا المبلغ إذا تم تحصيل جزء منه فقط.</div>
       </div>
       <div class="field">
@@ -3723,7 +3752,7 @@ function renderClientForm(){
       <tr data-cs-row="${row.id}">
         <td class="num muted">${i+3}</td>
         <td><input class="csLabelInput" data-id="${row.id}" value="${esc(row.label)}" placeholder="بيان الدفعة"></td>
-        <td><input type="number" step="0.01" class="csPercentInput" data-id="${row.id}" value="${esc(row.percent??"")}" placeholder="0" style="max-width:100px;"></td>
+        <td><input type="number" step="any" class="csPercentInput" data-id="${row.id}" value="${esc(row.percent??"")}" placeholder="0" style="max-width:100px;"></td>
         <td class="num"><span id="csVal_${row.id}">0</span> ر.ع</td>
         <td class="no-print" style="white-space:nowrap;">
           <button type="button" class="btn btn-ghost btn-sm" data-cs-up="${row.id}" title="نقل لأعلى">↑</button>
@@ -3739,8 +3768,10 @@ function renderClientForm(){
     yearRows += `
       <tr>
         <td>السنة ${arabicYear(i+1)}</td>
-        <td><input type="number" step="0.01" class="yearPctInput" data-idx="${i}" value="${esc(yp.percent??"")}" placeholder="0" style="max-width:110px;"></td>
-        <td class="num"><span id="yearVal_${i}">0</span> ر.ع</td>
+        <td><input type="number" step="any" class="yearPctInput" data-idx="${i}" value="${esc(yp.percent??"")}" placeholder="0" style="max-width:110px;"></td>
+        <td class="num">${can("clients.manualAmounts")
+          ? `<input type="number" step="any" class="yearAmtInput" data-idx="${i}" placeholder="0" style="max-width:160px;"> ر.ع`
+          : `<span id="yearVal_${i}">0</span> ر.ع`}</td>
       </tr>`;
   }
 
@@ -3755,7 +3786,7 @@ function renderClientForm(){
           ? `<input class="siLabelInput" data-id="${row.id}" value="${esc(row.label)}" placeholder="بيان البند">`
           : `<span>${esc(row.label||"—")}</span>`}</td>
         <td>${adminCanEditItems
-          ? `<input type="number" step="0.01" class="siPercentInput" data-id="${row.id}" value="${esc(row.percent??"")}" placeholder="0" style="max-width:100px;">`
+          ? `<input type="number" step="any" class="siPercentInput" data-id="${row.id}" value="${esc(row.percent??"")}" placeholder="0" style="max-width:100px;">`
           : `<span>${esc(row.percent??"0")}%</span>`}</td>
         <td class="num"><span id="siVal_${row.id}">0</span> ر.ع</td>
         ${adminCanEditItems ? `
@@ -3789,7 +3820,7 @@ function renderClientForm(){
             </div>
             <div class="field" style="margin-bottom:0;">
               <label>قيمة القسط الشهري</label>
-              <input type="number" step="0.001" class="phaseInput" data-idx="${i}" data-pi="${pi}" value="${esc(ph.value??"")}" placeholder="اتركه 0 للحساب التلقائي">
+              <input type="number" step="any" class="phaseInput" data-idx="${i}" data-pi="${pi}" value="${esc(ph.value??"")}" placeholder="اتركه 0 للحساب التلقائي">
               <div class="import-hint" id="phaseHint_${i}_${pi}"></div>
             </div>
           </div>`).join("")}
@@ -3836,20 +3867,26 @@ function renderClientForm(){
       <div class="form-section-title"><span class="num">2</span> الافتراضات المالية الأساسية</div>
       <div class="field">
         <label>إجمالي سعر الوحدة * (إدخال يدوي)</label>
-        <input id="fUnitPrice" type="number" step="0.001" value="${esc(f.unitPrice)}" placeholder="0.00">
+        <input id="fUnitPrice" type="number" step="any" value="${esc(f.unitPrice)}" placeholder="0.00">
       </div>
       <div class="row">
         <div class="field">
           <label>دفعة الحجز — النسبة % (إدخال يدوي)</label>
-          <input id="fResPct" type="number" step="0.01" value="${esc(f.reservationPct)}" placeholder="مثال: 5">
+          <input id="fResPct" type="number" step="any" value="${esc(f.reservationPct)}" placeholder="مثال: 5">
         </div>
         <div class="field">
           <label>دفعة المقدم — النسبة % (إدخال يدوي)</label>
-          <input id="fDownPct" type="number" step="0.01" value="${esc(f.downPaymentPct)}" placeholder="مثال: 10">
+          <input id="fDownPct" type="number" step="any" value="${esc(f.downPaymentPct)}" placeholder="مثال: 10">
         </div>
       </div>
       <div class="calc-row"><span class="k">قيمة دفعة الحجز (تلقائي)</span><span class="v" id="spanResVal">0 ر.ع</span></div>
       <div class="calc-row"><span class="k">قيمة دفعة المقدم (تلقائي)</span><span class="v" id="spanDownVal">0 ر.ع</span></div>
+      ${can("clients.manualAmounts") ? `
+      <div class="row">
+        <div class="field"><label>أو اكتب قيمة الحجز يدويًا (ر.ع)</label><input id="fResAmt" type="number" step="any" placeholder="0"></div>
+        <div class="field"><label>أو اكتب قيمة المقدم يدويًا (ر.ع)</label><input id="fDownAmt" type="number" step="any" placeholder="0"></div>
+      </div>
+      <div class="import-hint">النسبة والقيمة مرتبطتان: عدّل أيهما والآخر يتحدّث تلقائيًا بدون تقريب.</div>` : ""}
       <div class="totals-row">
         <span>المتبقي المقسط على السنوات — نسبة <span id="spanRemainPct">0%</span></span>
         <span id="spanRemainVal">0 ر.ع</span>
@@ -3867,17 +3904,17 @@ function renderClientForm(){
       <div class="row" id="taxFieldsRow" style="${f.taxEnabled?"":"display:none;"}">
         <div class="field">
           <label>نسبة الضريبة % (تُحسب تلقائيًا من سعر الوحدة)</label>
-          <input id="fTaxPct" type="number" step="0.01" value="${esc(f.taxPct)}" placeholder="مثال: 5">
+          <input id="fTaxPct" type="number" step="any" value="${esc(f.taxPct)}" placeholder="مثال: 5">
         </div>
       </div>
       <div class="row" id="taxCalcRow" style="${f.taxEnabled?"":"display:none;"}">
         <div class="field">
           <label>إجمالي قيمة الضريبة (محسوبة تلقائيًا — يمكن مسحها وكتابتها يدويًا)</label>
-          <input id="fTaxAmount" type="number" step="0.001" value="${esc(f.taxAmount)}" data-manual="${f.taxAmountManualFlag?"1":""}" placeholder="0">
+          <input id="fTaxAmount" type="number" step="any" ${can("clients.manualAmounts")?"":"readonly"} value="${esc(f.taxAmount)}" data-manual="${f.taxAmountManualFlag?"1":""}" placeholder="0">
         </div>
         <div class="field">
           <label>إجمالي سعر الوحدة شامل الضريبة (محسوب تلقائيًا — يمكن مسحه وكتابته يدويًا)</label>
-          <input id="fTaxTotalAmount" type="number" step="0.001" value="${esc(f.taxTotalAmount)}" placeholder="0">
+          <input id="fTaxTotalAmount" type="number" step="any" ${can("clients.manualAmounts")?"":"readonly"} value="${esc(f.taxTotalAmount)}" placeholder="0">
         </div>
       </div>
     </div>
@@ -4388,15 +4425,15 @@ function openEditInstallmentModal(instId){
       </div>
       <div class="field">
         <label>القيمة المستحقة</label>
-        <input id="editInstAmount" type="number" step="0.001" value="${inst.amount}">
+        <input id="editInstAmount" type="number" step="any" value="${inst.amount}">
       </div>
       <div class="field">
         <label>قيمة الضريبة (منفصلة عن القيمة المستحقة أعلاه)</label>
-        <input id="editInstTax" type="number" step="0.001" value="${inst.taxAmount}">
+        <input id="editInstTax" type="number" step="any" value="${inst.taxAmount}">
       </div>
       <div class="field">
         <label>الإجمالي شامل الضريبة (افتراضيًا = القيمة المستحقة + الضريبة، قابل للتعديل يدويًا)</label>
-        <input id="editInstTotal" type="number" step="0.001" value="${inst.totalWithTax}">
+        <input id="editInstTotal" type="number" step="any" value="${inst.totalWithTax}">
       </div>
       <div class="field">
         <label>تاريخ الاستحقاق</label>
@@ -4474,7 +4511,7 @@ function updateChequeAmount(){
       if(inst.dueDate && inst.dueDate > latestDue) latestDue = inst.dueDate;
     }
   });
-  amtInput.value = total.toFixed(3);
+  amtInput.value = roundNum(total);
   if(dateInput) dateInput.value = latestDue;
   summary.textContent = ids.length
     ? `محدد: ${labels.join("، ")} — إجمالي ${fmt(total)} ر.ع`
@@ -4495,10 +4532,19 @@ function saveCheque(){
   const amount = parseFloat(document.getElementById("chkAmount").value)||0;
 
   const plan = planWithPayments(c);
-  const allocations = ids.map(id=>{
+  const needs = ids.map(id=>{
     const inst = plan.find(i=>i.id===id);
     const dueAmt = inst.dueAmount!=null ? inst.dueAmount : inst.amount;
-    return { installmentId:id, amount: Math.max(0, dueAmt - inst.coveredAmount) };
+    return Math.max(0, dueAmt - inst.coveredAmount);
+  });
+  const totalNeed = needs.reduce((t,x)=>t+x,0);
+  const manualDiffers = can("cheques.manualAmount") && amount>0 && Math.abs(amount-totalNeed)>1e-9;
+  let left = amount;
+  const allocations = ids.map((id,k)=>{
+    if(!manualDiffers) return { installmentId:id, amount: needs[k] };
+    const a = (k===ids.length-1) ? Math.max(0,left) : Math.min(needs[k], Math.max(0,left));
+    left -= a;
+    return { installmentId:id, amount:a };
   });
 
   const cheque = {
@@ -4745,8 +4791,31 @@ function setText(id, text){
   if(el) el.textContent = text;
 }
 
+/* ربط النسبة بالقيمة المكتوبة يدويًا (حجز / مقدم / إجمالي كل سنة) — النسبة هي المرجع المخزَّن،
+   والحقل الذي يكتب فيه المستخدم الآن يحدّد الاتجاه، بدون أي تقريب. */
+function syncManualAmounts(){
+  const g = id=>document.getElementById(id);
+  const act = document.activeElement;
+  const unit = parseFloat(g("fUnitPrice")?.value)||0;
+  const link = (ae, pe, base)=>{
+    if(!ae || !pe) return;
+    if(act===ae){
+      pe.value = (ae.value.trim()==="" || base<=0) ? (ae.value.trim()==="" ? "" : pe.value) : roundNum((parseFloat(ae.value)||0)/base*100);
+    } else {
+      ae.value = pe.value.trim()==="" ? "" : roundNum(base*(parseFloat(pe.value)||0)/100);
+    }
+  };
+  link(g("fResAmt"), g("fResPct"), unit);
+  link(g("fDownAmt"), g("fDownPct"), unit);
+  const remain = unit*(100-(parseFloat(g("fResPct")?.value)||0)-(parseFloat(g("fDownPct")?.value)||0))/100;
+  document.querySelectorAll(".yearAmtInput").forEach(ae=>{
+    link(ae, document.querySelector(`.yearPctInput[data-idx="${ae.dataset.idx}"]`), remain);
+  });
+}
+
 function recalcClientForm(){
   if(!document.getElementById("clientFormCard")) return;
+  syncManualAmounts();
   const chequesCountVal = document.getElementById("fChequesCount")?.value;
   if(chequesCountVal!==undefined){
     const ny = yearsFromCheques(chequesCountVal);
@@ -4764,7 +4833,7 @@ function recalcClientForm(){
   setText("spanDownVal", fmt(downVal)+" ر.ع");
   setText("csResRefVal", fmt(resVal)+" ر.ع");
   setText("csDownRefVal", fmt(downVal)+" ر.ع");
-  setText("spanRemainPct", remainPct.toFixed(2)+"%");
+  setText("spanRemainPct", pctStr(remainPct)+"%");
   setText("spanRemainVal", fmt(remainVal)+" ر.ع");
   const remainWarn = document.getElementById("remainWarn");
   if(remainWarn){
@@ -4819,7 +4888,7 @@ function recalcClientForm(){
     totalCsPct += pct; totalCsVal += val;
     setText("csVal_"+inp.dataset.id, fmt(val));
   });
-  setText("csTotalPct", totalCsPct.toFixed(2)+"%");
+  setText("csTotalPct", pctStr(totalCsPct)+"%");
   setText("csTotalVal", fmt(totalCsVal)+" ر.ع");
   const csChk = document.getElementById("csTotalChk");
   if(csChk){
@@ -4827,7 +4896,7 @@ function recalcClientForm(){
     else if(Math.abs(totalCsPct-100)<0.5){
       csChk.innerHTML = `<span style="color:var(--ok);">✓ إجمالي نسب الجدول مطابق للمتبقي (100%)</span>`;
     } else {
-      csChk.innerHTML = `<span style="color:var(--warn);">مجموع النسب الحالي ${totalCsPct.toFixed(2)}% — يجب أن يساوي 100%</span>`;
+      csChk.innerHTML = `<span style="color:var(--warn);">مجموع النسب الحالي ${pctStr(totalCsPct)}% — يجب أن يساوي 100%</span>`;
     }
   }
 
@@ -4849,7 +4918,7 @@ function recalcClientForm(){
     totalSiPct += pct; totalSiVal += val;
     setText("siVal_"+id, fmt(val));
   });
-  setText("siTotalPct", totalSiPct.toFixed(2)+"%");
+  setText("siTotalPct", pctStr(totalSiPct)+"%");
   setText("siTotalVal", fmt(totalSiVal)+" ر.ع");
 
   let totalYearPct=0, totalYearVal=0;
@@ -4896,7 +4965,7 @@ function recalcClientForm(){
       }
     }
   });
-  setText("yearsTotalPct", totalYearPct.toFixed(2)+"%");
+  setText("yearsTotalPct", pctStr(totalYearPct)+"%");
   setText("yearsTotalVal", fmt(totalYearVal)+" ر.ع");
   const yearsChk = document.getElementById("yearsTotalChk");
   if(yearsChk){
@@ -4904,7 +4973,7 @@ function recalcClientForm(){
     else if(Math.abs(totalYearPct-100)<0.5 && Math.abs(totalYearVal-remainVal)<1){
       yearsChk.innerHTML = `<span style="color:var(--ok);">✓ إجمالي توزيع السنوات مطابق للمتبقي (100%)</span>`;
     } else {
-      yearsChk.innerHTML = `<span style="color:var(--warn);">مجموع النسب الحالي ${totalYearPct.toFixed(2)}% — يجب أن يساوي 100%</span>`;
+      yearsChk.innerHTML = `<span style="color:var(--warn);">مجموع النسب الحالي ${pctStr(totalYearPct)}% — يجب أن يساوي 100%</span>`;
     }
   }
 }
@@ -5002,7 +5071,7 @@ function saveClientForm(){
     if(!rows.length){ toast("أضف دفعة واحدة على الأقل في جدول الاستشاري"); return; }
     const totalPct = rows.reduce((s,r)=>s+(parseFloat(r.percent)||0),0);
     if(Math.abs(totalPct-100) > 0.5){
-      toast(`مجموع نسب جدول الاستشاري ${totalPct.toFixed(2)}% — يجب أن يساوي 100% تقريبًا`);
+      toast(`مجموع نسب جدول الاستشاري ${pctStr(totalPct)}% — يجب أن يساوي 100% تقريبًا`);
       return;
     }
     payload.consultantSchedule = rows.map(r=>({ id:r.id||uid("cs"), label:r.label.trim(), percent: parseFloat(r.percent)||0 }));
@@ -5182,6 +5251,116 @@ function renderReceiptsScreen(){
 
 /* ============================= SCREEN: USERS (admin only — تفعيل/إيقاف الأكواد) ============================= */
 let permEditCode = null; // الكود الذي يجري تعديل صلاحياته الآن
+let acctEditId = null;   // معرّف المستخدم الذي يجري تعديل كوده/رقمه السري الآن
+
+function renderAccountEditor(){
+  const u = USERS.find(x=>x.id===acctEditId);
+  if(!u) return "";
+  const isSelf = currentUser && normCode(u.code)===normCode(currentUser.code);
+  return `
+  <div class="card perm-editor" id="acctEditorCard">
+    <div class="toolbar" style="margin-bottom:2px;">
+      <h2 style="margin:0;">تعديل حساب: ${esc(u.code)}</h2>
+    </div>
+    <p class="hint">غيّر الكود (البريد) أو الرقم السري أو المسمى. عند تغيير الكود يُنشأ له حساب دخول جديد ويُنقل إليه كل ما يخصه (الصلاحيات وحالة التفعيل). عند تغيير الرقم السري يلزم الرقم السري الحالي الصحيح.</p>
+    <div class="row">
+      <div class="field"><label>الكود (اسم الدخول — بريد إلكتروني)</label>
+        <input id="acctCode" type="email" value="${esc(u.code)}" autocomplete="off" style="direction:ltr;text-align:right;" ${isSelf?"readonly":""}>
+        ${isSelf ? `<div class="import-hint">لا يمكن تغيير كود الحساب الذي سجّلت به الدخول حاليًا — يمكنك تغيير رقمه السري فقط.</div>` : ""}
+      </div>
+      <div class="field"><label>المسمى</label><input id="acctLabel" value="${esc(u.label)}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>الرقم السري الحالي</label>
+        <input id="acctCurPass" type="password" value="${esc(getKnownPw(u)||"")}" autocomplete="off" style="direction:ltr;text-align:right;">
+      </div>
+      <div class="field"><label>الرقم السري الجديد (اتركه فارغًا بدون تغيير — 6 أحرف على الأقل)</label>
+        <input id="acctNewPass" type="password" autocomplete="new-password" style="direction:ltr;text-align:right;">
+      </div>
+    </div>
+    <label class="perm-check" style="margin-bottom:10px;"><input type="checkbox" id="acctShowPw"> <span>إظهار الأرقام السرية</span></label>
+    <div id="acctMsg" style="font-size:13px;margin-bottom:10px;"></div>
+    <div class="toolbar no-print">
+      <button type="button" class="btn btn-brass" id="btnAcctSave">حفظ</button>
+      <button type="button" class="btn btn-ghost" id="btnAcctReset" title="يرسل رابطًا لإعادة تعيين الرقم السري على بريد هذا الكود">إرسال رابط إعادة تعيين الرقم السري</button>
+      <button type="button" class="btn btn-ghost" id="btnAcctClose">إغلاق</button>
+    </div>
+  </div>`;
+}
+
+function acctErrorText(e){
+  const c = (e && e.code) || "";
+  if(["auth/wrong-password","auth/invalid-credential","auth/invalid-login-credentials","auth/user-not-found"].includes(c))
+    return "الرقم السري الحالي غير صحيح. اكتب الرقم السري الحالي الصحيح، أو أرسل رابط إعادة التعيين.";
+  if(c==="auth/weak-password") return "الرقم السري ضعيف — يجب أن يكون 6 أحرف على الأقل.";
+  if(c==="auth/invalid-email") return "صيغة الكود (البريد الإلكتروني) غير صحيحة.";
+  if(c==="auth/email-already-in-use") return "هذا الكود مسجَّل بالفعل برقم سري مختلف.";
+  if(c==="auth/operation-not-allowed") return "إنشاء الحسابات غير مفعّل في Firebase (Authentication ← Sign-in method ← Email/Password).";
+  if(c==="auth/too-many-requests") return "محاولات كثيرة — انتظر قليلًا ثم أعد المحاولة.";
+  if(c==="auth/network-request-failed") return "تعذّر الاتصال بالإنترنت.";
+  return (e && e.message) ? e.message : "حدث خطأ غير متوقع.";
+}
+
+function secondaryAuth(){
+  let app2 = firebase.apps.find(a=>a.name==="secondary");
+  if(!app2) app2 = firebase.initializeApp(firebaseConfig, "secondary");
+  return app2.auth();
+}
+
+async function saveAccountEdit(){
+  const u = USERS.find(x=>x.id===acctEditId);
+  const msg = document.getElementById("acctMsg");
+  const say = (t, ok)=>{ msg.innerHTML = `<span style="color:var(--${ok?"ok":"warn"});">${esc(t)}</span>`; };
+  if(!u) return;
+  const newCode = normCode(document.getElementById("acctCode").value);
+  const newLabel = (document.getElementById("acctLabel").value||"").trim() || u._baseLabel;
+  const curPass = document.getElementById("acctCurPass").value;
+  const newPass = document.getElementById("acctNewPass").value;
+  const oldCode = normCode(u.code);
+  const codeChanged = newCode !== oldCode;
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newCode)){ say("أدخل كودًا صحيحًا بصيغة بريد إلكتروني.", false); return; }
+  if(USERS.some(x=>x!==u && normCode(x.code)===newCode)){ say("هذا الكود مستخدم لمستخدم آخر.", false); return; }
+  if(codeChanged && currentUser && oldCode===normCode(currentUser.code)){ say("لا يمكن تغيير كود حسابك الحالي.", false); return; }
+  if(newPass && newPass.length<6){ say("الرقم السري الجديد يجب ألا يقل عن 6 أحرف.", false); return; }
+  const saveBtn = document.getElementById("btnAcctSave");
+  saveBtn.disabled = true; say("جارٍ الحفظ…", true);
+  try{
+    let finalPass = null;
+    if(codeChanged){
+      const pw = newPass || curPass;
+      if(!pw || pw.length<6){ throw {code:"auth/weak-password"}; }
+      const auth2 = secondaryAuth();
+      try{ await auth2.createUserWithEmailAndPassword(newCode, pw); }
+      catch(e){
+        if(e && e.code==="auth/email-already-in-use") await auth2.signInWithEmailAndPassword(newCode, pw);
+        else throw e;
+      }
+      try{ await auth2.signOut(); }catch(e){}
+      // نقل ما يخص الكود القديم إلى الكود الجديد
+      if(state.userPerms[oldCode]){ state.userPerms[newCode] = state.userPerms[oldCode]; delete state.userPerms[oldCode]; }
+      if(Object.prototype.hasOwnProperty.call(state.userStatus, oldCode)){ state.userStatus[newCode] = state.userStatus[oldCode]; delete state.userStatus[oldCode]; }
+      finalPass = pw;
+    } else if(newPass){
+      const auth2 = secondaryAuth();
+      const cred = await auth2.signInWithEmailAndPassword(u.code, curPass);
+      await cred.user.updatePassword(newPass);
+      try{ await auth2.signOut(); }catch(e){}
+      finalPass = newPass;
+    }
+    if(finalPass!==null) setKnownPw(u, finalPass);
+    if(newCode===normCode(u.id) && newLabel===u._baseLabel) delete state.userAccounts[u.id];
+    else state.userAccounts[u.id] = { code:newCode, label:newLabel };
+    applyUserAccounts();
+    saveState();
+    toast("تم حفظ بيانات الحساب");
+    acctEditId = null;
+    render();
+  }catch(e){
+    console.error(e);
+    say(acctErrorText(e), false);
+    saveBtn.disabled = false;
+  }
+}
 
 function screenLabelsOf(u){
   return effScreens(u).map(sn=>SCREEN_LABELS[sn]||sn).join("، ") || "—";
@@ -5275,7 +5454,8 @@ function renderUsersScreen(){
         <td class="num">${nTools} / ${ALL_TOOL_KEYS.length} ${custom ? '<span class="badge badge-due">مخصّصة</span>' : ""}</td>
         <td>${active ? '<span class="badge badge-ok">مفعّل</span>' : '<span class="badge badge-warn">موقوف</span>'}</td>
         <td class="no-print" style="white-space:nowrap;">
-          ${isAdm ? `<span class="muted">كاملة (ثابتة)</span>` : `<button class="btn btn-navy btn-sm" data-edit-perms="${esc(u.code)}">تعديل الصلاحيات</button>`}
+          <button class="btn btn-ghost btn-sm" data-edit-account="${esc(u.id)}">تعديل الكود والرقم السري</button>
+          ${isAdm ? `<span class="muted">صلاحيات كاملة</span>` : `<button class="btn btn-navy btn-sm" data-edit-perms="${esc(u.code)}">تعديل الصلاحيات</button>`}
           <button class="btn ${active?'btn-ghost':'btn-brass'} btn-sm" data-toggle-user="${esc(u.code)}" ${isSelf?"disabled title=\"لا يمكنك إيقاف حسابك الحالي\"":""}>
             ${active ? "إيقاف الكود" : "تشغيل الكود"}
           </button>
@@ -5299,6 +5479,7 @@ function renderUsersScreen(){
       </table>
     </div>
   </div>
+  ${acctEditId ? renderAccountEditor() : ""}
   ${permEditCode ? renderPermEditor() : ""}
   ${renderPermReport()}`;
 }
@@ -5321,6 +5502,33 @@ function bindUsersEvents(){
   if(rw) rw.addEventListener("click", ()=>exportTableWord("permReportTable","تقرير الصلاحيات"));
   const rp = document.getElementById("btnPrintPermReport");
   if(rp) rp.addEventListener("click", ()=>printTable("permReportTable","تقرير الصلاحيات"));
+
+  document.querySelectorAll("[data-edit-account]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      acctEditId = btn.dataset.editAccount;
+      render();
+      const card = document.getElementById("acctEditorCard");
+      if(card && card.scrollIntoView) card.scrollIntoView({behavior:"smooth", block:"start"});
+    });
+  });
+  const acctCard = document.getElementById("acctEditorCard");
+  if(acctCard){
+    document.getElementById("btnAcctSave").addEventListener("click", saveAccountEdit);
+    document.getElementById("btnAcctClose").addEventListener("click", ()=>{ acctEditId = null; render(); });
+    document.getElementById("acctShowPw").addEventListener("change", e=>{
+      const t = e.target.checked ? "text" : "password";
+      document.getElementById("acctCurPass").type = t;
+      document.getElementById("acctNewPass").type = t;
+    });
+    document.getElementById("btnAcctReset").addEventListener("click", async ()=>{
+      const u = USERS.find(x=>x.id===acctEditId); if(!u) return;
+      const msg = document.getElementById("acctMsg");
+      try{
+        await firebase.auth().sendPasswordResetEmail(u.code);
+        msg.innerHTML = `<span style="color:var(--ok);">تم إرسال رابط إعادة التعيين إلى ${esc(u.code)}</span>`;
+      }catch(e){ msg.innerHTML = `<span style="color:var(--warn);">${esc(acctErrorText(e))}</span>`; }
+    });
+  }
 
   document.querySelectorAll("[data-edit-perms]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
