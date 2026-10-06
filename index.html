@@ -2159,19 +2159,15 @@ function purgeOrphanChequeData(){
 let view = "cheques";
 
 /* ============================= HELPERS ============================= */
-/* بدون أي تقريب: تُعرض القيمة كاملة بكل كسورها. الخطوة الوحيدة هي إزالة «ضجيج» الفاصلة العائمة
-   (مثل 0.30000000000000004) عبر 12 خانة معنوية، ولا تُقرَّب أي قيمة مخزّنة أو محسوبة. */
-function cleanNum(n){
-  n = Number(n);
-  if(!isFinite(n)) return 0;
-  return parseFloat(n.toPrecision(12));
-}
+/* ممنوع التقريب نهائيًا: تُعرض كل قيمة بكل كسورها كما هي (أطول تمثيل دقيق للرقم)، ولا تُقرَّب
+   أي قيمة مخزّنة أو محسوبة أو معروضة. */
+/* الاستثناء الوحيد: إزالة «ضجيج» الفاصلة العائمة الثنائية (مثل 849999.9876536999 بدل 849999.9876537)
+   عند الخانة 15 المعنوية فقط — أي رقم يكتبه المستخدم (حتى 15 خانة معنوية) يبقى كما هو تمامًا. */
+function cleanNum(n){ n = Number(n); return isFinite(n) ? parseFloat(n.toPrecision(15)) : 0; }
 function fmt(n){
-  return cleanNum(n).toLocaleString("ar-OM",{minimumFractionDigits:0,maximumFractionDigits:12});
+  return cleanNum(n).toLocaleString("ar-OM",{minimumFractionDigits:0,maximumFractionDigits:20});
 }
-function fmtPct(n){
-  return cleanNum(n).toLocaleString("ar-OM",{minimumFractionDigits:0,maximumFractionDigits:12});
-}
+function fmtPct(n){ return fmt(n); }
 function pctStr(n){ return String(cleanNum(n)); }
 /* Plain (no thousands-separator) numeric string safe to assign to an <input type=number>
    value, rounded to 3 decimals and stripped of any trailing zeros/dot. Empty for 0/NaN
@@ -2179,7 +2175,7 @@ function pctStr(n){ return String(cleanNum(n)); }
 function roundNum(n){
   n = Number(n);
   if(!isFinite(n)) n = 0;
-  return String(parseFloat(n.toPrecision(15)));
+  return String(cleanNum(n));
 }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 /* Compute the date `months` after startDate, keeping startDate's day-of-month
@@ -3553,7 +3549,7 @@ function openBounceModal(chqId){
 let clientForm = null; // when editing/adding
 function newPhase(months, value){ return { id: uid("ph"), months: months, value: value==null ? "" : value }; }
 function defaultPhases(){ return [ newPhase(3), newPhase(3), newPhase(5) ]; }
-function blankYearPlan(){ return { percent:"", phases: defaultPhases() }; }
+function blankYearPlan(){ return { percent:"", amtManual:"", phases: defaultPhases() }; }
 
 /* Default rows for the "consultant" installment schedule, mirroring the reference
    22-item breakdown supplied by the consultant. Items 1 (دفعة الحجز) and 2 (دفعة المقدم)
@@ -3589,7 +3585,7 @@ function defaultConsultantSchedule(){
 function blankClientForm(){
   return {
     code:"", name:"", unit:"", phone:"", contractNumber:"", contractDate:"", installmentsStartDate:"",
-    unitPrice:"", reservationPct:"", downPaymentPct:"", chequesCount:36, years:3,
+    unitPrice:"", reservationPct:"", downPaymentPct:"", reservationAmt:"", downAmt:"", chequesCount:36, years:3,
     yearPlans:[blankYearPlan(), blankYearPlan(), blankYearPlan()],
     installmentMode:"standard", consultantSchedule: defaultConsultantSchedule(),
     extraStandardItems: [],
@@ -3770,7 +3766,7 @@ function renderClientForm(){
         <td>السنة ${arabicYear(i+1)}</td>
         <td><input type="number" step="any" class="yearPctInput" data-idx="${i}" value="${esc(yp.percent??"")}" placeholder="0" style="max-width:110px;"></td>
         <td class="num">${can("clients.manualAmounts")
-          ? `<input type="number" step="any" class="yearAmtInput" data-idx="${i}" placeholder="0" style="max-width:160px;"> ر.ع`
+          ? `<input type="number" step="any" class="yearAmtInput" data-idx="${i}" placeholder="0" style="max-width:160px;" value="${esc(yp.amtManual??"")}" data-manual="${String(yp.amtManual??"").trim()!=="" ? "1" : ""}"> ر.ع`
           : `<span id="yearVal_${i}">0</span> ر.ع`}</td>
       </tr>`;
   }
@@ -3883,8 +3879,8 @@ function renderClientForm(){
       <div class="calc-row"><span class="k">قيمة دفعة المقدم (تلقائي)</span><span class="v" id="spanDownVal">0 ر.ع</span></div>
       ${can("clients.manualAmounts") ? `
       <div class="row">
-        <div class="field"><label>أو اكتب قيمة الحجز يدويًا (ر.ع)</label><input id="fResAmt" type="number" step="any" placeholder="0"></div>
-        <div class="field"><label>أو اكتب قيمة المقدم يدويًا (ر.ع)</label><input id="fDownAmt" type="number" step="any" placeholder="0"></div>
+        <div class="field"><label>أو اكتب قيمة الحجز يدويًا (ر.ع)</label><input id="fResAmt" type="number" step="any" placeholder="0" value="${esc(f.reservationAmt??"")}" data-manual="${String(f.reservationAmt??"").trim()!=="" ? "1" : ""}"></div>
+        <div class="field"><label>أو اكتب قيمة المقدم يدويًا (ر.ع)</label><input id="fDownAmt" type="number" step="any" placeholder="0" value="${esc(f.downAmt??"")}" data-manual="${String(f.downAmt??"").trim()!=="" ? "1" : ""}"></div>
       </div>
       <div class="import-hint">النسبة والقيمة مرتبطتان: عدّل أيهما والآخر يتحدّث تلقائيًا بدون تقريب.</div>` : ""}
       <div class="totals-row">
@@ -4580,12 +4576,14 @@ function bindClientsEvents(){
         _editId:c.id, code:c.code, name:c.name, unit:c.unit, phone:c.phone,
         contractNumber:c.contractNumber||"", contractDate:c.contractDate||"", installmentsStartDate:c.installmentsStartDate||"",
         unitPrice:c.unitPrice,
+        reservationAmt: c.reservationAmtManual ?? "", downAmt: c.downAmtManual ?? "",
         reservationPct: c.reservationPct!=null ? (c.reservationPct*100) : "",
         downPaymentPct: c.downPaymentPct!=null ? (c.downPaymentPct*100) : "",
         years:c.years,
         chequesCount: c.chequesCount!=null ? c.chequesCount : (c.years*12),
         yearPlans: (c.yearPlans||[]).map(yp=>({
           percent: yp.percent!=null ? (yp.percent*100) : "",
+          amtManual: yp.amtManual ?? "",
           phases: storedPhasesToForm(yp)
         })),
         installmentMode: c.installmentMode || "standard",
@@ -4769,6 +4767,17 @@ function bindClientsEvents(){
 function bindClientFormRecalc(){
   const card = document.getElementById("clientFormCard");
   if(!card) return;
+  // الحقل المكتوب يدويًا يُعلَّم manual (وهو المرجع)، وكتابة النسبة تلغي علامة القيمة المقابلة
+  const flagPair = (ae, pe)=>{
+    if(!ae) return;
+    ae.addEventListener("input", ()=>{ ae.dataset.manual = ae.value.trim()==="" ? "" : "1"; });
+    if(pe) pe.addEventListener("input", ()=>{ ae.dataset.manual = ""; });
+  };
+  flagPair(document.getElementById("fResAmt"), document.getElementById("fResPct"));
+  flagPair(document.getElementById("fDownAmt"), document.getElementById("fDownPct"));
+  document.querySelectorAll(".yearAmtInput").forEach(ae=>{
+    flagPair(ae, document.querySelector(`.yearPctInput[data-idx="${ae.dataset.idx}"]`));
+  });
   card.addEventListener("input", recalcClientForm);
   // The tax-amount and total-after-tax boxes mirror each other live; typing directly
   // into one marks it "manual" (so the %-based auto-calc leaves it alone) and clears
@@ -4793,23 +4802,40 @@ function setText(id, text){
 
 /* ربط النسبة بالقيمة المكتوبة يدويًا (حجز / مقدم / إجمالي كل سنة) — النسبة هي المرجع المخزَّن،
    والحقل الذي يكتب فيه المستخدم الآن يحدّد الاتجاه، بدون أي تقريب. */
+/* المبالغ الحالية في النموذج: القيمة المكتوبة يدويًا (إن وُجدت) هي المرجع، وإلا تُحسب من النسبة بلا أي تقريب */
+function formAmounts(){
+  const g = id=>document.getElementById(id);
+  const unit = parseFloat(g("fUnitPrice")?.value)||0;
+  const resPct = parseFloat(g("fResPct")?.value)||0;
+  const downPct = parseFloat(g("fDownPct")?.value)||0;
+  const rae = g("fResAmt"), dae = g("fDownAmt");
+  const resManual = !!rae && rae.dataset.manual==="1";
+  const downManual = !!dae && dae.dataset.manual==="1";
+  const resVal = resManual ? (parseFloat(rae.value)||0) : unit*resPct/100;
+  const downVal = downManual ? (parseFloat(dae.value)||0) : unit*downPct/100;
+  const anyManual = resManual || downManual;
+  const remainVal = anyManual ? (unit-resVal-downVal) : unit*(100-resPct-downPct)/100;
+  const remainPct = (anyManual && unit>0) ? remainVal/unit*100 : (100-resPct-downPct);
+  return { unit, resPct, downPct, resVal, downVal, remainVal, remainPct, resManual, downManual };
+}
+/* ربط النسبة بالقيمة (حجز / مقدم / إجمالي كل سنة): القيمة المكتوبة يدويًا تبقى كما كُتبت تمامًا،
+   والنسبة تُشتق منها، والعكس عند كتابة النسبة — بدون أي تقريب. */
 function syncManualAmounts(){
   const g = id=>document.getElementById(id);
-  const act = document.activeElement;
-  const unit = parseFloat(g("fUnitPrice")?.value)||0;
+  const A = formAmounts();
   const link = (ae, pe, base)=>{
     if(!ae || !pe) return;
-    if(act===ae){
-      pe.value = (ae.value.trim()==="" || base<=0) ? (ae.value.trim()==="" ? "" : pe.value) : roundNum((parseFloat(ae.value)||0)/base*100);
+    if(ae.dataset.manual==="1"){
+      if(base>0) pe.value = String((parseFloat(ae.value)||0)/base*100);
     } else {
-      ae.value = pe.value.trim()==="" ? "" : roundNum(base*(parseFloat(pe.value)||0)/100);
+      ae.value = pe.value.trim()==="" ? "" : String(base*(parseFloat(pe.value)||0)/100);
     }
   };
-  link(g("fResAmt"), g("fResPct"), unit);
-  link(g("fDownAmt"), g("fDownPct"), unit);
-  const remain = unit*(100-(parseFloat(g("fResPct")?.value)||0)-(parseFloat(g("fDownPct")?.value)||0))/100;
+  link(g("fResAmt"), g("fResPct"), A.unit);
+  link(g("fDownAmt"), g("fDownPct"), A.unit);
+  const A2 = formAmounts();
   document.querySelectorAll(".yearAmtInput").forEach(ae=>{
-    link(ae, document.querySelector(`.yearPctInput[data-idx="${ae.dataset.idx}"]`), remain);
+    link(ae, document.querySelector(`.yearPctInput[data-idx="${ae.dataset.idx}"]`), A2.remainVal);
   });
 }
 
@@ -4821,13 +4847,10 @@ function recalcClientForm(){
     const ny = yearsFromCheques(chequesCountVal);
     setText("chequesYearsHint", `= ${ny} ${ny===1?"سنة":"سنوات"} بالتفصيل (${ny*12} شهرًا معروضًا أدناه — اضغط خارج الحقل لتحديث الجدول)`);
   }
-  const unitPrice = parseFloat(document.getElementById("fUnitPrice")?.value)||0;
-  const resPct = parseFloat(document.getElementById("fResPct")?.value)||0;
-  const downPct = parseFloat(document.getElementById("fDownPct")?.value)||0;
-  const resVal = unitPrice*resPct/100;
-  const downVal = unitPrice*downPct/100;
-  const remainPct = 100 - resPct - downPct;
-  const remainVal = unitPrice*remainPct/100;
+  const FA = formAmounts();
+  const unitPrice = FA.unit, resPct = FA.resPct, downPct = FA.downPct;
+  const resVal = FA.resVal, downVal = FA.downVal;
+  const remainPct = FA.remainPct, remainVal = FA.remainVal;
 
   setText("spanResVal", fmt(resVal)+" ر.ع");
   setText("spanDownVal", fmt(downVal)+" ر.ع");
@@ -4925,7 +4948,8 @@ function recalcClientForm(){
   document.querySelectorAll(".yearPctInput").forEach(inp=>{
     const idx = inp.dataset.idx;
     const pct = parseFloat(inp.value)||0;
-    const val = remainVal*pct/100;
+    const yAmtEl = document.querySelector(`.yearAmtInput[data-idx="${idx}"]`);
+    const val = (yAmtEl && yAmtEl.dataset.manual==="1") ? (parseFloat(yAmtEl.value)||0) : remainVal*pct/100;
     totalYearPct += pct; totalYearVal += val;
     setText("yearVal_"+idx, fmt(val));
     setText("yearVal2_"+idx, fmt(val));
@@ -4990,6 +5014,13 @@ function syncFormFromInputs(){
   clientForm.unitPrice = g("fUnitPrice");
   clientForm.reservationPct = g("fResPct");
   clientForm.downPaymentPct = g("fDownPct");
+  { const ra = document.getElementById("fResAmt"), da = document.getElementById("fDownAmt");
+    if(ra) clientForm.reservationAmt = ra.dataset.manual==="1" ? ra.value : "";
+    if(da) clientForm.downAmt = da.dataset.manual==="1" ? da.value : "";
+    document.querySelectorAll(".yearAmtInput").forEach(ae=>{
+      const yp = clientForm.yearPlans[parseInt(ae.dataset.idx,10)];
+      if(yp) yp.amtManual = ae.dataset.manual==="1" ? ae.value : "";
+    }); }
   clientForm.installmentsStartDate = g("fInstStart");
   clientForm.chequesCount = g("fChequesCount");
   clientForm.taxEnabled = document.getElementById("fTaxEnabled")?.checked || false;
@@ -5042,13 +5073,18 @@ function saveClientForm(){
 
   const unitPrice = parseFloat(f.unitPrice)||0;
   if(unitPrice<=0){ toast("أدخل إجمالي سعر الوحدة"); return; }
-  const reservationPct = (parseFloat(f.reservationPct)||0)/100;
-  const downPaymentPct = (parseFloat(f.downPaymentPct)||0)/100;
-  const reservation = unitPrice*reservationPct;
-  const downPayment = unitPrice*downPaymentPct;
-  const remainingPct = 1 - reservationPct - downPaymentPct;
-  if(remainingPct<0){ toast("نسبة الحجز + المقدم تتجاوز 100% — راجع النسب"); return; }
-  const remaining = unitPrice*remainingPct;
+  const resPctRaw = parseFloat(f.reservationPct)||0;
+  const downPctRaw = parseFloat(f.downPaymentPct)||0;
+  const resManual = String(f.reservationAmt??"").trim()!=="";
+  const downManual = String(f.downAmt??"").trim()!=="";
+  const reservation = resManual ? (parseFloat(f.reservationAmt)||0) : unitPrice*resPctRaw/100;
+  const downPayment = downManual ? (parseFloat(f.downAmt)||0) : unitPrice*downPctRaw/100;
+  const reservationPct = resManual ? reservation/unitPrice : resPctRaw/100;
+  const downPaymentPct = downManual ? downPayment/unitPrice : downPctRaw/100;
+  const anyManualAmt = resManual || downManual;
+  const remaining = anyManualAmt ? (unitPrice-reservation-downPayment) : unitPrice*(100-resPctRaw-downPctRaw)/100;
+  const remainingPct = anyManualAmt ? remaining/unitPrice : (1 - reservationPct - downPaymentPct);
+  if(remaining<0){ toast("الحجز + المقدم يتجاوزان سعر الوحدة — راجع القيم"); return; }
 
   const installmentMode = f.installmentMode === "consultant" ? "consultant" : "standard";
 
@@ -5063,6 +5099,7 @@ function saveClientForm(){
     contractNumber:(f.contractNumber||"").trim(), contractDate:f.contractDate, installmentsStartDate:f.installmentsStartDate,
     unitPrice, reservationPct, reservation, downPaymentPct, downPayment,
     remainingPct, remaining, installmentMode,
+    reservationAmtManual: resManual ? reservation : null, downAmtManual: downManual ? downPayment : null,
     taxEnabled, taxPct, taxAmountManual: (taxEnabled && taxAmountManualRaw>0) ? taxAmountManualRaw : null, taxAmount
   };
 
@@ -5099,11 +5136,12 @@ function saveClientForm(){
     }
 
     const yearPlans = f.yearPlans.map(yp=>{
-      const percent = (parseFloat(yp.percent)||0)/100;
-      const amount = remaining*percent;
+      const yManual = String(yp.amtManual??"").trim()!=="";
+      const amount = yManual ? (parseFloat(yp.amtManual)||0) : remaining*(parseFloat(yp.percent)||0)/100;
+      const percent = yManual ? (remaining>0 ? amount/remaining : 0) : (parseFloat(yp.percent)||0)/100;
       const r = resolvePhases(amount, yp.phases);
       return {
-        percent, amount, lastInstallment:r.lastInst,
+        percent, amount, amtManual: yManual ? amount : null, lastInstallment:r.lastInst,
         phases: yp.phases.map((ph,k)=>({ id: ph.id||uid("ph"), months: phaseMonthsNum(ph), amount: r.amounts[k], raw: ph.value || "" }))
       };
     });
